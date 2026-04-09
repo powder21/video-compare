@@ -909,34 +909,38 @@ void VideoCompare::compare() {
       filtered_frame_queues_[side]->restart();
       converted_frame_queues_[side]->restart();
 
-      // 7. Pop frames until we reach the target position.
-      // Seeking lands on the nearest keyframe BEFORE the target, so the decoder
-      // produces intermediate frames we must skip.  The target raw PTS is the
-      // left video's current position plus the effective time shift.
+      // 7. Drain frames from keyframe to target, keeping up to frame_buffer_size_
+      // frames so that subsequent backward steps can use the buffer instead of seeking.
       const int64_t target_raw_pts = left.pts_ + effective_shift;
 
       AVFrameUniquePtr candidate{nullptr, avframe_deleter};
-      right_state.frame_ = nullptr;
+      std::deque<AVFrameUniquePtr> drain_frames;
 
       while (converted_frame_queues_[side]->pop(candidate)) {
-        right_state.frame_ = std::move(candidate);
+        const bool reached_target = (candidate->pts >= target_raw_pts);
 
-        // Stop once we've reached or passed the target PTS
-        if (right_state.frame_->pts >= target_raw_pts) {
+        // Collect frames: push newest to front, trim oldest from back
+        drain_frames.push_front(std::move(candidate));
+        if (drain_frames.size() > frame_buffer_size_) {
+          drain_frames.pop_back();
+        }
+
+        if (reached_target) {
           break;
         }
       }
 
-      if (right_state.frame_ != nullptr) {
-        right_state.pts_ = right_state.frame_->pts;
-        right_state.effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_state.frame_->pts, true);
+      if (!drain_frames.empty()) {
+        // drain_frames[0] = target frame, [1] = one before target, etc.
+        right_state.pts_ = drain_frames[0]->pts;
+        right_state.effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, drain_frames[0]->pts, true);
         right_state.pts_ -= right_state.effective_time_shift_;
         right_state.previous_decoded_picture_number_ = -1;
         right_state.decoded_picture_number_ = 1;
+        right_state.frame_ = nullptr;
 
-        // Clear and re-seed the frame buffer
-        right_state.frames_.clear();
-        right_state.frames_.push_front(std::move(right_state.frame_));
+        // Replace frame buffer with collected drain frames
+        right_state.frames_ = std::move(drain_frames);
 
         // Reset frame offset so display shows the new frame
         frame_offset = 0;
