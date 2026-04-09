@@ -1036,8 +1036,10 @@ void VideoCompare::compare() {
 #endif
 
       // Helper: show stepping notification on both the on-screen overlay and the terminal.
+      // Uses set_pending_message (always shown on-screen) instead of notify_user
+      // (which suppresses the overlay in windowed mode).
       auto notify_step = [&](const std::string& message) {
-        display_->notify_user(message);
+        display_->set_pending_message(message);
         std::cout << message << std::endl;
       };
 
