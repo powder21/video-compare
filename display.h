@@ -456,9 +456,7 @@ class Display {
   void refresh_selection_end_from_mouse();
   void on_view_transform_changed();
   void draw_selection_rect();
-  void possibly_save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame);
   void possibly_apply_crop();
-  void save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame, const SDL_Rect& selection_rect);
 
   void enter_crop_preview(const AVFrame* left_frame);
   void render_crop_preview();

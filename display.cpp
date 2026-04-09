@@ -2132,23 +2132,6 @@ void Display::draw_selection_rect() {
   }
 }
 
-void Display::possibly_save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame) {
-  if (selection_state_ != SelectionState::Completed) {
-    return;
-  }
-
-  const SDL_Rect selection_rect = get_left_selection_rect();
-
-  if (selection_rect.w <= 0 || selection_rect.h <= 0) {
-    std::cerr << "Selection rectangle is empty. Please make a valid selection." << std::endl;
-  } else {
-    save_selected_area(left_frame, right_frame, selection_rect);
-  }
-
-  selection_state_ = SelectionState::None;
-  save_selected_area_ = false;
-}
-
 void Display::possibly_apply_crop() {
   if (selection_state_ != SelectionState::Completed) {
     return;
@@ -2186,70 +2169,6 @@ void Display::possibly_apply_crop() {
   selection_state_ = SelectionState::None;
   crop_mode_ = false;
   crop_target_side_ = CropTargetSide::Undefined;
-}
-
-void Display::save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame, const SDL_Rect& selection_rect) {
-  std::atomic_bool error_occurred(false);
-
-  // Lambda for creating and initializing frames
-  auto create_frame = [&](const int width, const int height, const AVFrame* source_frame) -> AVFrame* {
-    AVFrame* frame = av_frame_alloc();
-    frame->format = source_frame->format;
-    frame->width = width;
-    frame->height = height;
-    frame->colorspace = source_frame->colorspace;
-    frame->color_range = source_frame->color_range;
-    av_frame_get_buffer(frame, 0);
-    return frame;
-  };
-
-  AVFrame* left_selected = create_frame(selection_rect.w, selection_rect.h, left_frame);
-  AVFrame* right_selected = create_frame(selection_rect.w, selection_rect.h, right_frame);
-  AVFrame* concatenated = create_frame(selection_rect.w * 2, selection_rect.h, left_frame);
-
-  const int pixel_size = use_10_bpc_ ? 3 * sizeof(uint16_t) : 3;
-
-  for (int y = 0; y < selection_rect.h; y++) {
-    const int src_y = selection_rect.y + y;
-    const int dst_y = y;
-
-    // Copy left frame data
-    memcpy(left_selected->data[0] + dst_y * left_selected->linesize[0], left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-
-    // Copy right frame data
-    memcpy(right_selected->data[0] + dst_y * right_selected->linesize[0], right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-
-    // Copy to concatenated frame
-    memcpy(concatenated->data[0] + dst_y * concatenated->linesize[0], left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-    memcpy(concatenated->data[0] + dst_y * concatenated->linesize[0] + selection_rect.w * pixel_size, right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-  }
-
-  const std::string& left_stem = side_ui_[displayed_left_side_.as_simple_index()].file_stem;
-  const std::string& right_stem = side_ui_[displayed_right_side_.as_simple_index()].file_stem;
-  const bool stems_equal = (left_stem == right_stem);
-  const std::string left_filename = string_sprintf("%s%s_cutout_%04d.png", left_stem.c_str(), stems_equal ? "_left" : "", saved_selected_image_number_);
-  const std::string right_filename = string_sprintf("%s%s_cutout_%04d.png", right_stem.c_str(), stems_equal ? "_right" : "", saved_selected_image_number_);
-  const std::string concatenated_filename = string_sprintf("%s_%s_cutout_concat_%04d.png", left_stem.c_str(), right_stem.c_str(), saved_selected_image_number_);
-
-  auto save_frame = [&](const AVFrame* frame, const std::string& filename) { return write_png(frame, filename, error_occurred); };
-
-  std::thread save_left_thread(save_frame, left_selected, left_filename);
-  std::thread save_right_thread(save_frame, right_selected, right_filename);
-  std::thread save_concatenated_thread(save_frame, concatenated, concatenated_filename);
-
-  save_left_thread.join();
-  save_right_thread.join();
-  save_concatenated_thread.join();
-
-  av_frame_free(&left_selected);
-  av_frame_free(&right_selected);
-  av_frame_free(&concatenated);
-
-  if (!error_occurred) {
-    std::cout << "Saved " << string_sprintf("%s, %s and %s", left_filename.c_str(), right_filename.c_str(), concatenated_filename.c_str()) << std::endl;
-
-    saved_selected_image_number_++;
-  }
 }
 
 bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable) {
@@ -3813,12 +3732,18 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
   // Helper to create an AVFrame with allocated buffer
   auto create_frame = [&](const int width, const int height, const AVFrame* source_frame) -> AVFrame* {
     AVFrame* frame = av_frame_alloc();
+    if (!frame) {
+      return nullptr;
+    }
     frame->format = source_frame->format;
     frame->width = width;
     frame->height = height;
     frame->colorspace = source_frame->colorspace;
     frame->color_range = source_frame->color_range;
-    av_frame_get_buffer(frame, 0);
+    if (av_frame_get_buffer(frame, 0) < 0) {
+      av_frame_free(&frame);
+      return nullptr;
+    }
     return frame;
   };
 
@@ -3838,6 +3763,11 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
   // Create individual right cutouts
   for (const auto* right_frame : valid_right_frames) {
     AVFrame* cutout = create_frame(selection_rect.w, selection_rect.h, right_frame);
+    if (!cutout) {
+      std::cerr << "Failed to allocate cutout frame." << std::endl;
+      destroy_crop_preview();
+      return;
+    }
     for (int y = 0; y < selection_rect.h; y++) {
       const int src_y = selection_rect.y + y;
       memcpy(cutout->data[0] + y * cutout->linesize[0],
@@ -3851,6 +3781,11 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
   const int num_panels = 1 + static_cast<int>(valid_right_frames.size());
   const int concat_width = selection_rect.w * num_panels;
   crop_preview_data_.concatenated = create_frame(concat_width, selection_rect.h, left_frame);
+  if (!crop_preview_data_.concatenated) {
+    std::cerr << "Failed to allocate concatenated frame." << std::endl;
+    destroy_crop_preview();
+    return;
+  }
 
   // Copy left panel
   for (int y = 0; y < selection_rect.h; y++) {
