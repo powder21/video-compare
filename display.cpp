@@ -2758,6 +2758,13 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     enter_crop_preview(left_frame);
     selection_state_ = SelectionState::None;
     save_selected_area_ = false;
+
+    // If preview was activated, skip the remaining render present
+    // (the next frame will hit the early return at the top and render the preview)
+    if (crop_preview_mode_ == CropPreviewMode::Active) {
+      render_crop_preview();
+      return true;
+    }
   }
   if (crop_mode_) {
     possibly_apply_crop();

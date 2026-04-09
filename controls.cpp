@@ -58,7 +58,7 @@ static const std::vector<ControlSection> control_sections{
       {"Shift+A", "Seek to the previous frame (best with intra-frame formats)"},
       {"Shift+M", "Cycle display mode"},
       {"Shift+S", "Cycle aspect view mode"},
-      {"Shift+F", "Select a region and save cutouts as PNGs"},
+      {"Shift+F", "Select a region, preview crop, then save cutouts as PNGs"},
       {"Shift+X", "Print display state to console"},
       {"Shift+W", "Restore saved window size"},
       {"Ctrl+W", "Restore startup window size"},
