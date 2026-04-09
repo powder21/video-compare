@@ -1035,6 +1035,12 @@ void VideoCompare::compare() {
       }
 #endif
 
+      // Helper: show stepping notification on both the on-screen overlay and the terminal.
+      auto notify_step = [&](const std::string& message) {
+        display_->notify_user(message);
+        std::cout << message << std::endl;
+      };
+
       const int format_conversion_sws_flags = determine_sws_flags(display_->get_fast_input_alignment());
       // Update active right video index from display and switch if changed
       size_t new_active_index = display_->get_active_right_index();
@@ -1049,7 +1055,7 @@ void VideoCompare::compare() {
         // Show current offset when switching to a right video
         const int64_t switched_offset = per_right_time_shifts[active_right_index_];
         if (switched_offset != 0) {
-          display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+          notify_step(string_sprintf("Right #%zu: %s%lld frames",
             active_right_index_ + 1,
             switched_offset > 0 ? "+" : "",
             static_cast<long long>(switched_offset)));
@@ -1133,19 +1139,19 @@ void VideoCompare::compare() {
           // Notify user
           const int64_t total_offset = per_right_time_shifts[active_right_index_];
           if (frames_stepped < step_right_frames) {
-            display_->notify_user(string_sprintf("Right #%zu: %s%lld frames (reached end)",
+            notify_step(string_sprintf("Right #%zu: %s%lld frames (reached end)",
               active_right_index_ + 1,
               total_offset > 0 ? "+" : "",
               static_cast<long long>(total_offset)));
           } else {
-            display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+            notify_step(string_sprintf("Right #%zu: %s%lld frames",
               active_right_index_ + 1,
               total_offset > 0 ? "+" : "",
               static_cast<long long>(total_offset)));
           }
         } else {
           // Could not step at all — already at the end
-          display_->notify_user(string_sprintf("Right #%zu: reached end of video", active_right_index_ + 1));
+          notify_step(string_sprintf("Right #%zu: reached end of video", active_right_index_ + 1));
         }
 
         skip_update = true;
@@ -1189,11 +1195,11 @@ void VideoCompare::compare() {
         if (new_front_pts == old_front_pts) {
           // Didn't move — undo the offset change and notify boundary
           per_right_time_shifts[active_right_index_] -= step_right_frames;  // undo (subtract negative = add)
-          display_->notify_user(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
+          notify_step(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
         } else {
           // Notify user with current offset
           const int64_t total_offset = per_right_time_shifts[active_right_index_];
-          display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+          notify_step(string_sprintf("Right #%zu: %s%lld frames",
             active_right_index_ + 1,
             total_offset > 0 ? "+" : "",
             static_cast<long long>(total_offset)));
@@ -1212,7 +1218,7 @@ void VideoCompare::compare() {
           const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
           partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
 
-          display_->notify_user(string_sprintf("Right #%zu: offset reset", active_right_index_ + 1));
+          notify_step(string_sprintf("Right #%zu: offset reset", active_right_index_ + 1));
         }
       }
 
