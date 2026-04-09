@@ -1097,10 +1097,10 @@ void VideoCompare::compare() {
           const int64_t static_shift = compute_static_right_time_shift(active_right_index_, right_delta);
           right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
 
-          // Update frame timing for the stepped right video
-          const int64_t new_pts = right_ptr->frame_->pts - right_ptr->effective_time_shift_;
-          right_ptr->delta_pts_ = (right_ptr->pts_ != 0) ? (new_pts - right_ptr->pts_) : right_ptr->delta_pts_;
-          right_ptr->pts_ = new_pts;
+          // Update PTS only — do NOT update delta_pts_ here because the time-shifted
+          // PTS difference (≈0 for CFR) is not the actual frame duration.  Corrupting
+          // delta_pts_ shrinks the sync tolerance and causes both sides to pop.
+          right_ptr->pts_ = right_ptr->frame_->pts - right_ptr->effective_time_shift_;
 
           // Store in the right video's frame buffer
           if (right_ptr->frames_.size() >= frame_buffer_size_) {
