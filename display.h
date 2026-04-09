@@ -269,6 +269,40 @@ class Display {
   // All right video file names (set once at startup)
   std::vector<std::string> all_right_file_names_;
 
+  // Crop preview state
+  enum class CropPreviewMode { Inactive, Active };
+  CropPreviewMode crop_preview_mode_{CropPreviewMode::Inactive};
+
+  // Preview texture and dimensions
+  SDL_Texture* crop_preview_texture_{nullptr};
+  int crop_preview_width_{0};
+  int crop_preview_height_{0};
+
+  // Preview zoom/pan state (in window coordinates)
+  // preview_scale_: window pixels per preview-image pixel
+  // preview_offset_: top-left corner of the rendered preview in window coordinates
+  float preview_scale_{1.0F};
+  Vector2D preview_offset_{0.0F, 0.0F};
+
+  // Stored cropped frames for deferred saving
+  struct CropPreviewData {
+    std::vector<AVFrame*> right_cutouts;   // N individual right cutouts
+    AVFrame* concatenated{nullptr};         // left + all rights side-by-side
+
+    void free_all() {
+      for (auto& f : right_cutouts) {
+        if (f) {
+          av_frame_free(&f);
+        }
+      }
+      right_cutouts.clear();
+      if (concatenated) {
+        av_frame_free(&concatenated);
+      }
+    }
+  };
+  CropPreviewData crop_preview_data_;
+
   SDL sdl_;
   TTF_Font* small_font_{nullptr};
   TTF_Font* big_font_{nullptr};
@@ -425,6 +459,12 @@ class Display {
   void possibly_save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame);
   void possibly_apply_crop();
   void save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame, const SDL_Rect& selection_rect);
+
+  void enter_crop_preview(const AVFrame* left_frame);
+  void render_crop_preview();
+  void exit_crop_preview(bool save);
+  void save_crop_preview_images();
+  void destroy_crop_preview();
 
   float compute_zoom_factor(const float zoom_level) const;
   Vector2D compute_relative_move_offset(const Vector2D& zoom_point, const float zoom_factor) const;

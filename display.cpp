@@ -410,6 +410,8 @@ Display::Display(const int display_number,
 }
 
 Display::~Display() {
+  destroy_crop_preview();
+
   SDL_DestroyTexture(video_texture_linear_);
   SDL_DestroyTexture(video_texture_nn_);
   SDL_DestroyTexture(side_ui_[LEFT.as_simple_index()].text_texture);
@@ -3679,4 +3681,14 @@ void Display::set_all_right_frames(const std::vector<const AVFrame*>& frames) {
 
 void Display::set_all_right_file_names(const std::vector<std::string>& file_names) {
   all_right_file_names_ = file_names;
+}
+
+void Display::destroy_crop_preview() {
+  if (crop_preview_texture_) {
+    SDL_DestroyTexture(crop_preview_texture_);
+    crop_preview_texture_ = nullptr;
+  }
+  crop_preview_data_.free_all();
+  crop_preview_width_ = 0;
+  crop_preview_height_ = 0;
 }
