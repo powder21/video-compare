@@ -4043,6 +4043,76 @@ void Display::exit_crop_preview(const bool save) {
 }
 
 void Display::save_crop_preview_images() {
-  // Stub: will be fully implemented in Task 6
-  set_pending_message("Saving crop images...");
+  std::atomic_bool error_occurred(false);
+
+  auto save_frame = [&](const AVFrame* frame, const std::string& filename) {
+    return write_png(frame, filename, error_occurred);
+  };
+
+  // Compute file stems
+  const std::string left_stem = strip_ffmpeg_patterns(get_file_stem(left_file_name_));
+  std::vector<std::string> right_stems;
+  for (const auto& fn : all_right_file_names_) {
+    right_stems.push_back(strip_ffmpeg_patterns(get_file_stem(fn)));
+  }
+
+  // Build mapping from cutout index to original right video index
+  // (all_right_frames_ may have nullptr entries that were skipped during preview creation)
+  std::vector<size_t> valid_indices;
+  for (size_t i = 0; i < all_right_frames_.size(); i++) {
+    if (all_right_frames_[i] != nullptr) {
+      valid_indices.push_back(i);
+    }
+  }
+
+  const int num = saved_selected_image_number_;
+  std::vector<std::string> right_filenames;
+  for (size_t vi = 0; vi < valid_indices.size(); vi++) {
+    const size_t orig_idx = valid_indices[vi];
+    const std::string& stem = (orig_idx < right_stems.size()) ? right_stems[orig_idx] : "unknown";
+
+    // If there's only one right video, don't add an index suffix
+    if (valid_indices.size() == 1) {
+      right_filenames.push_back(string_sprintf("%s_cutout_%04d.png", stem.c_str(), num));
+    } else {
+      right_filenames.push_back(string_sprintf("%s_right%zu_cutout_%04d.png", stem.c_str(), orig_idx + 1, num));
+    }
+  }
+
+  const std::string concat_filename = string_sprintf("%s_cutout_concat_%04d.png", left_stem.c_str(), num);
+
+  // Save all images in parallel using threads
+  std::vector<std::thread> save_threads;
+
+  // Save individual right cutouts
+  for (size_t i = 0; i < crop_preview_data_.right_cutouts.size() && i < right_filenames.size(); i++) {
+    save_threads.emplace_back(save_frame, crop_preview_data_.right_cutouts[i], right_filenames[i]);
+  }
+
+  // Save concatenated image
+  save_threads.emplace_back(save_frame, crop_preview_data_.concatenated, concat_filename);
+
+  // Wait for all saves to complete
+  for (auto& t : save_threads) {
+    t.join();
+  }
+
+  if (!error_occurred) {
+    // Build notification message
+    std::string saved_files;
+    for (size_t i = 0; i < right_filenames.size(); i++) {
+      if (i > 0) {
+        saved_files += ", ";
+      }
+      saved_files += right_filenames[i];
+    }
+    saved_files += ", " + concat_filename;
+
+    const std::string message = string_sprintf("Saved %zu images: %s",
+                                               right_filenames.size() + 1, saved_files.c_str());
+    set_pending_message(message);
+    std::cout << message << std::endl;
+
+    saved_selected_image_number_++;
+  }
 }
