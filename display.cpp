@@ -2253,6 +2253,12 @@ void Display::save_selected_area(const AVFrame* left_frame, const AVFrame* right
 }
 
 bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable) {
+  // If crop preview is active, render preview and skip normal video rendering
+  if (crop_preview_mode_ == CropPreviewMode::Active) {
+    render_crop_preview();
+    return true;
+  }
+
   const std::string left_frame_key = get_frame_key(left_frame);
   const std::string right_frame_key = get_frame_key(right_frame);
 
@@ -2748,8 +2754,10 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     save_image_frames_ = false;
   }
 
-  if (save_selected_area_) {
-    possibly_save_selected_area(left_frame, right_frame);
+  if (save_selected_area_ && selection_state_ == SelectionState::Completed) {
+    enter_crop_preview(left_frame);
+    selection_state_ = SelectionState::None;
+    save_selected_area_ = false;
   }
   if (crop_mode_) {
     possibly_apply_crop();
@@ -3681,6 +3689,145 @@ void Display::set_all_right_frames(const std::vector<const AVFrame*>& frames) {
 
 void Display::set_all_right_file_names(const std::vector<std::string>& file_names) {
   all_right_file_names_ = file_names;
+}
+
+void Display::enter_crop_preview(const AVFrame* left_frame) {
+  const SDL_Rect selection_rect = get_left_selection_rect();
+
+  if (selection_rect.w <= 0 || selection_rect.h <= 0) {
+    std::cerr << "Selection rectangle is empty. Please make a valid selection." << std::endl;
+    return;
+  }
+
+  // Destroy any previous preview
+  destroy_crop_preview();
+
+  const int pixel_size = use_10_bpc_ ? 3 * sizeof(uint16_t) : 3;
+
+  // Helper to create an AVFrame with allocated buffer
+  auto create_frame = [&](const int width, const int height, const AVFrame* source_frame) -> AVFrame* {
+    AVFrame* frame = av_frame_alloc();
+    frame->format = source_frame->format;
+    frame->width = width;
+    frame->height = height;
+    frame->colorspace = source_frame->colorspace;
+    frame->color_range = source_frame->color_range;
+    av_frame_get_buffer(frame, 0);
+    return frame;
+  };
+
+  // Collect valid right frames
+  std::vector<const AVFrame*> valid_right_frames;
+  for (const auto* frame : all_right_frames_) {
+    if (frame != nullptr) {
+      valid_right_frames.push_back(frame);
+    }
+  }
+
+  if (valid_right_frames.empty()) {
+    std::cerr << "No right video frames available for crop preview." << std::endl;
+    return;
+  }
+
+  // Create individual right cutouts
+  for (const auto* right_frame : valid_right_frames) {
+    AVFrame* cutout = create_frame(selection_rect.w, selection_rect.h, right_frame);
+    for (int y = 0; y < selection_rect.h; y++) {
+      const int src_y = selection_rect.y + y;
+      memcpy(cutout->data[0] + y * cutout->linesize[0],
+             right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size,
+             selection_rect.w * pixel_size);
+    }
+    crop_preview_data_.right_cutouts.push_back(cutout);
+  }
+
+  // Create concatenated frame: [left | right0 | right1 | ... | rightN-1]
+  const int num_panels = 1 + static_cast<int>(valid_right_frames.size());
+  const int concat_width = selection_rect.w * num_panels;
+  crop_preview_data_.concatenated = create_frame(concat_width, selection_rect.h, left_frame);
+
+  // Copy left panel
+  for (int y = 0; y < selection_rect.h; y++) {
+    const int src_y = selection_rect.y + y;
+    memcpy(crop_preview_data_.concatenated->data[0] + y * crop_preview_data_.concatenated->linesize[0],
+           left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size,
+           selection_rect.w * pixel_size);
+  }
+
+  // Copy right panels
+  for (size_t i = 0; i < valid_right_frames.size(); i++) {
+    const int x_offset = static_cast<int>(i + 1) * selection_rect.w;
+    for (int y = 0; y < selection_rect.h; y++) {
+      const int src_y = selection_rect.y + y;
+      memcpy(crop_preview_data_.concatenated->data[0] + y * crop_preview_data_.concatenated->linesize[0] + x_offset * pixel_size,
+             valid_right_frames[i]->data[0] + src_y * valid_right_frames[i]->linesize[0] + selection_rect.x * pixel_size,
+             selection_rect.w * pixel_size);
+    }
+  }
+
+  // Create SDL texture from concatenated frame
+  crop_preview_width_ = concat_width;
+  crop_preview_height_ = selection_rect.h;
+
+  if (use_10_bpc_) {
+    // For 10-bit: create ARGB2101010 texture and convert from RGB48LE
+    crop_preview_texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB2101010,
+                                              SDL_TEXTUREACCESS_STATIC, concat_width, selection_rect.h);
+    if (!crop_preview_texture_) {
+      std::cerr << "Failed to create 10-bit preview texture: " << SDL_GetError() << std::endl;
+      destroy_crop_preview();
+      return;
+    }
+
+    // Convert RGB48LE -> ARGB2101010
+    const size_t row_bytes = concat_width * sizeof(uint32_t);
+    std::vector<uint32_t> packed_buffer(concat_width * selection_rect.h);
+    const AVFrame* concat = crop_preview_data_.concatenated;
+
+    for (int y = 0; y < selection_rect.h; y++) {
+      const uint16_t* src = reinterpret_cast<const uint16_t*>(concat->data[0] + y * concat->linesize[0]);
+      uint32_t* dst = packed_buffer.data() + y * concat_width;
+      for (int x = 0; x < concat_width; x++) {
+        const uint16_t r = src[x * 3] >> 6;
+        const uint16_t g = src[x * 3 + 1] >> 6;
+        const uint16_t b = src[x * 3 + 2] >> 6;
+        dst[x] = (3u << 30) | (static_cast<uint32_t>(r) << 20) | (static_cast<uint32_t>(g) << 10) | static_cast<uint32_t>(b);
+      }
+    }
+    SDL_UpdateTexture(crop_preview_texture_, nullptr, packed_buffer.data(), row_bytes);
+  } else {
+    // For 8-bit: create RGB24 texture and upload directly
+    crop_preview_texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24,
+                                              SDL_TEXTUREACCESS_STATIC, concat_width, selection_rect.h);
+    if (!crop_preview_texture_) {
+      std::cerr << "Failed to create preview texture: " << SDL_GetError() << std::endl;
+      destroy_crop_preview();
+      return;
+    }
+    SDL_UpdateTexture(crop_preview_texture_, nullptr,
+                      crop_preview_data_.concatenated->data[0],
+                      crop_preview_data_.concatenated->linesize[0]);
+  }
+
+  // Initialize preview zoom/pan to fit the entire image in the window
+  const float scale_x = static_cast<float>(window_width_) / static_cast<float>(concat_width);
+  const float scale_y = static_cast<float>(window_height_) / static_cast<float>(selection_rect.h);
+  preview_scale_ = std::min(scale_x, scale_y) * 0.9F;  // 90% of window for margin
+  preview_offset_ = Vector2D(
+      (static_cast<float>(window_width_) - concat_width * preview_scale_) / 2.0F,
+      (static_cast<float>(window_height_) - selection_rect.h * preview_scale_) / 2.0F);
+
+  crop_preview_mode_ = CropPreviewMode::Active;
+
+  // Pause playback while previewing
+  play_ = false;
+}
+
+void Display::render_crop_preview() {
+  // Stub: will be fully implemented in Task 4
+  SDL_SetRenderDrawColor(renderer_, 32, 32, 32, 255);
+  SDL_RenderClear(renderer_);
+  SDL_RenderPresent(renderer_);
 }
 
 void Display::destroy_crop_preview() {
