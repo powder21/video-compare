@@ -877,7 +877,7 @@ void VideoCompare::compare() {
     };
 
     // Partial seek: stop/drain/flush/reinit/seek/restart a single right video's pipeline,
-    // then pop the first frame and reset its state. Returns true if a frame was obtained.
+    // then drain frames until reaching the target position. Returns true if a frame was obtained.
     auto partial_seek_right_video = [&](const Side& side, SideState& right_state, const int64_t effective_shift, const float target_position) -> bool {
       // 1. Stop the packet queue to halt demuxing for this side
       packet_queues_[side]->stop();
@@ -909,8 +909,23 @@ void VideoCompare::compare() {
       filtered_frame_queues_[side]->restart();
       converted_frame_queues_[side]->restart();
 
-      // 7. Pop the first frame from the restarted pipeline
-      converted_frame_queues_[side]->pop(right_state.frame_);
+      // 7. Pop frames until we reach the target position.
+      // Seeking lands on the nearest keyframe BEFORE the target, so the decoder
+      // produces intermediate frames we must skip.  The target raw PTS is the
+      // left video's current position plus the effective time shift.
+      const int64_t target_raw_pts = left.pts_ + effective_shift;
+
+      AVFrameUniquePtr candidate{nullptr, avframe_deleter};
+      right_state.frame_ = nullptr;
+
+      while (converted_frame_queues_[side]->pop(candidate)) {
+        right_state.frame_ = std::move(candidate);
+
+        // Stop once we've reached or passed the target PTS
+        if (right_state.frame_->pts >= target_raw_pts) {
+          break;
+        }
+      }
 
       if (right_state.frame_ != nullptr) {
         right_state.pts_ = right_state.frame_->pts;
