@@ -1439,8 +1439,11 @@ void VideoCompare::compare() {
         }
       };
 
-      // sync left with all right videos (skip after stepping to prevent left from advancing)
-      if (step_right_frames == 0) {
+      // Sync left with all right videos.
+      // Only sync when actively consuming frames (playing or frame-navigating).
+      // During pause, any tiny PTS mismatch from stepping/seeking would cause
+      // unwanted frame pops that visually advance the wrong video.
+      if (fetch_next_frame) {
         for (auto& pair : side_states) {
           if (pair.first.is_right()) {
             SideState& right_state = pair.second;
