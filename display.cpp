@@ -3000,6 +3000,105 @@ void Display::handle_event(const SDL_Event& event) {
   event_ = event;
   input_received_ = true;
 
+  // Intercept events when crop preview is active
+  if (crop_preview_mode_ == CropPreviewMode::Active) {
+    switch (event_.type) {
+      case SDL_MOUSEWHEEL:
+        if (event_.wheel.y != 0) {
+          // Cursor-centered zoom (affine transform: cursor pixel stays fixed)
+          float delta_zoom = wheel_sensitivity_ * event_.wheel.y * (event_.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+          if (delta_zoom > 0) {
+            delta_zoom /= 2.0F;
+          }
+
+          const float new_scale = preview_scale_ * compute_zoom_factor(-delta_zoom);
+
+          if (new_scale >= 0.01F && new_scale <= 1000.0F) {
+            const float ratio = new_scale / preview_scale_;
+            const float mx = static_cast<float>(mouse_x_);
+            const float my = static_cast<float>(mouse_y_);
+
+            // Affine transform: new_offset = offset + (mouse - offset) * (1 - ratio)
+            // This preserves the image pixel under the cursor
+            const float new_ox = preview_offset_.x() + (mx - preview_offset_.x()) * (1.0F - ratio);
+            const float new_oy = preview_offset_.y() + (my - preview_offset_.y()) * (1.0F - ratio);
+
+            preview_offset_ = Vector2D(new_ox, new_oy);
+            preview_scale_ = new_scale;
+          }
+        }
+        break;
+
+      case SDL_MOUSEMOTION:
+        SDL_GetMouseState(&mouse_x_, &mouse_y_);
+
+        if (event_.motion.state & SDL_BUTTON_RMASK) {
+          // Right-click drag: pan the preview
+          const float dx = static_cast<float>(event_.motion.xrel);
+          const float dy = static_cast<float>(event_.motion.yrel);
+          preview_offset_ = preview_offset_ + Vector2D(dx, dy);
+        }
+        break;
+
+      case SDL_MOUSEBUTTONDOWN:
+      case SDL_MOUSEBUTTONUP:
+        // Update cursor for right-click pan indicator
+        if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK) {
+          SDL_SetCursor(pan_mode_cursor_);
+        } else {
+          SDL_SetCursor(normal_mode_cursor_);
+        }
+        break;
+
+      case SDL_KEYDOWN:
+        switch (event_.key.keysym.sym) {
+          case SDLK_RETURN:
+          case SDLK_KP_ENTER:
+            exit_crop_preview(true);   // Confirm: save images
+            break;
+          case SDLK_ESCAPE:
+            exit_crop_preview(false);  // Cancel: discard
+            break;
+          case SDLK_f:
+            if (event_.key.keysym.mod & KMOD_SHIFT) {
+              exit_crop_preview(false);  // Shift+F also cancels
+            }
+            break;
+          case SDLK_r:
+            // Reset preview zoom/pan to fit-in-window
+            {
+              const float scale_x = static_cast<float>(window_width_) / static_cast<float>(crop_preview_width_);
+              const float scale_y = static_cast<float>(window_height_) / static_cast<float>(crop_preview_height_);
+              preview_scale_ = std::min(scale_x, scale_y) * 0.9F;
+              preview_offset_ = Vector2D(
+                  (static_cast<float>(window_width_) - crop_preview_width_ * preview_scale_) / 2.0F,
+                  (static_cast<float>(window_height_) - crop_preview_height_ * preview_scale_) / 2.0F);
+            }
+            break;
+          default:
+            break;
+        }
+        break;
+
+      case SDL_WINDOWEVENT:
+        if (event_.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || event_.window.event == SDL_WINDOWEVENT_RESIZED) {
+          handle_window_resize();
+        }
+        if (event_.window.event == SDL_WINDOWEVENT_CLOSE) {
+          quit_ = true;
+        }
+        break;
+
+      case SDL_QUIT:
+        quit_ = true;
+        break;
+
+      default:
+        break;
+    }
+    return;  // Block all other events during preview
+  }
+
   auto update_cursor = [&]() {
     SDL_Cursor* cursor;
 
@@ -3922,4 +4021,28 @@ void Display::destroy_crop_preview() {
   crop_preview_data_.free_all();
   crop_preview_width_ = 0;
   crop_preview_height_ = 0;
+}
+
+void Display::exit_crop_preview(const bool save) {
+  if (crop_preview_mode_ != CropPreviewMode::Active) {
+    return;
+  }
+
+  if (save) {
+    save_crop_preview_images();
+  } else {
+    set_pending_message("Crop preview cancelled");
+    std::cout << "Crop preview cancelled" << std::endl;
+  }
+
+  destroy_crop_preview();
+  crop_preview_mode_ = CropPreviewMode::Inactive;
+
+  // Restore normal cursor
+  SDL_SetCursor(normal_mode_cursor_);
+}
+
+void Display::save_crop_preview_images() {
+  // Stub: will be fully implemented in Task 6
+  set_pending_message("Saving crop images...");
 }
