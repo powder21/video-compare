@@ -1137,15 +1137,34 @@ void VideoCompare::compare() {
         skip_update = true;
       }
 
-      // --- Per-right-video backward stepping (- key): partial seek ---
+      // --- Per-right-video backward stepping (- key) ---
       if (step_right_frames < 0 && !display_->get_play()) {
-        // Accumulate per-video offset
-        per_right_time_shifts[active_right_index_] += step_right_frames;  // step_right_frames is negative
+        const int steps_back = -step_right_frames;  // positive count
+        const int buffered_frames = static_cast<int>(right_ptr->frames_.size()) - 1;  // frames available behind current
 
-        // Compute target seek position and perform partial seek
-        const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
-        const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-        partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
+        if (steps_back <= buffered_frames) {
+          // Fast path: target frame is already in the buffer — no seek needed.
+          // Pop the newest N frames from the front; the target becomes frames_[0].
+          for (int i = 0; i < steps_back; i++) {
+            right_ptr->frames_.pop_front();
+          }
+
+          per_right_time_shifts[active_right_index_] += step_right_frames;  // negative
+
+          // Recompute PTS and effective shift from the buffer frame now at front
+          const int64_t static_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frames_[0]->pts, true);
+          right_ptr->pts_ = right_ptr->frames_[0]->pts - right_ptr->effective_time_shift_;
+
+          frame_offset = 0;
+        } else {
+          // Slow path: target is beyond the buffer — partial seek required.
+          per_right_time_shifts[active_right_index_] += step_right_frames;  // negative
+
+          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
+          partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
+        }
 
         // Notify user
         const int64_t total_offset = per_right_time_shifts[active_right_index_];
