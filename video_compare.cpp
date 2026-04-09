@@ -1132,10 +1132,20 @@ void VideoCompare::compare() {
 
           // Notify user
           const int64_t total_offset = per_right_time_shifts[active_right_index_];
-          display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
-            active_right_index_ + 1,
-            total_offset > 0 ? "+" : "",
-            static_cast<long long>(total_offset)));
+          if (frames_stepped < step_right_frames) {
+            display_->notify_user(string_sprintf("Right #%zu: %s%lld frames (reached end)",
+              active_right_index_ + 1,
+              total_offset > 0 ? "+" : "",
+              static_cast<long long>(total_offset)));
+          } else {
+            display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+              active_right_index_ + 1,
+              total_offset > 0 ? "+" : "",
+              static_cast<long long>(total_offset)));
+          }
+        } else {
+          // Could not step at all — already at the end
+          display_->notify_user(string_sprintf("Right #%zu: reached end of video", active_right_index_ + 1));
         }
 
         skip_update = true;
@@ -1145,6 +1155,9 @@ void VideoCompare::compare() {
       if (step_right_frames < 0 && !display_->get_play()) {
         const int steps_back = -step_right_frames;  // positive count
         const int buffered_frames = static_cast<int>(right_ptr->frames_.size()) - 1;  // frames available behind current
+
+        // Remember current front frame PTS to detect "didn't actually move"
+        const int64_t old_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
 
         if (steps_back <= buffered_frames) {
           // Fast path: target frame is already in the buffer — no seek needed.
@@ -1170,12 +1183,21 @@ void VideoCompare::compare() {
           partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
         }
 
-        // Notify user
-        const int64_t total_offset = per_right_time_shifts[active_right_index_];
-        display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
-          active_right_index_ + 1,
-          total_offset > 0 ? "+" : "",
-          static_cast<long long>(total_offset)));
+        // Check if the step actually moved to a different frame
+        const int64_t new_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
+
+        if (new_front_pts == old_front_pts) {
+          // Didn't move — undo the offset change and notify boundary
+          per_right_time_shifts[active_right_index_] -= step_right_frames;  // undo (subtract negative = add)
+          display_->notify_user(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
+        } else {
+          // Notify user with current offset
+          const int64_t total_offset = per_right_time_shifts[active_right_index_];
+          display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+            active_right_index_ + 1,
+            total_offset > 0 ? "+" : "",
+            static_cast<long long>(total_offset)));
+        }
 
         skip_update = true;
       }
