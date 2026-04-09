@@ -3672,3 +3672,11 @@ size_t Display::get_active_right_index() const {
 void Display::set_active_right_index(const size_t index) {
   active_right_index_ = std::min(index, num_right_videos_ > 0 ? num_right_videos_ - 1 : 0UL);
 }
+
+void Display::set_all_right_frames(const std::vector<const AVFrame*>& frames) {
+  all_right_frames_ = frames;
+}
+
+void Display::set_all_right_file_names(const std::vector<std::string>& file_names) {
+  all_right_file_names_ = file_names;
+}

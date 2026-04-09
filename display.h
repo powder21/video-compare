@@ -264,6 +264,11 @@ class Display {
   Vector2D move_offset_{0.0F, 0.0F};
   Vector2D global_center_{0.5F, 0.5F};
 
+  // All right video frames for crop preview (updated each refresh cycle, raw pointers owned by SideState)
+  std::vector<const AVFrame*> all_right_frames_;
+  // All right video file names (set once at startup)
+  std::vector<std::string> all_right_file_names_;
+
   SDL sdl_;
   TTF_Font* small_font_{nullptr};
   TTF_Font* big_font_{nullptr};
@@ -520,4 +525,7 @@ class Display {
   size_t get_num_right_videos() const;
   size_t get_active_right_index() const;
   void set_active_right_index(size_t index);
+
+  void set_all_right_frames(const std::vector<const AVFrame*>& frames);
+  void set_all_right_file_names(const std::vector<std::string>& file_names);
 };

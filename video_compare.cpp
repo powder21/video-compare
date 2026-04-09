@@ -344,6 +344,13 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
                                        config_.start_in_fullscreen, config_.left.file_name, right_file_name);
   display_->set_num_right_videos(right_video_info_.size());
   display_->set_active_right_index(active_right_index_);
+  {
+    std::vector<std::string> all_right_names;
+    for (size_t i = 0; i < right_video_info_.size(); i++) {
+      all_right_names.push_back(right_video_info_[Side::Right(i)].file_name);
+    }
+    display_->set_all_right_file_names(all_right_names);
+  }
   display_->update_metadata(left_video_metadata_, right_video_info_[active_right].metadata);
 
   scope_manager_ = std::make_unique<ScopeManager>(config.scopes, config.use_10_bpc, config.display_number);
@@ -1720,6 +1727,23 @@ void VideoCompare::compare() {
 
             // conditionally update the display; otherwise, sleep to conserve resources
             display_refresh_timer.update();
+
+            // Provide all right video frames for crop preview
+            {
+              std::vector<const AVFrame*> all_right_frames;
+              for (size_t i = 0; i < right_video_info_.size(); i++) {
+                const Side side = Side::Right(i);
+                const auto it = side_states.find(side);
+                if (it != side_states.end() && frame_offset >= 0 &&
+                    frame_offset < static_cast<int>(it->second.frames_.size()) &&
+                    it->second.frames_[frame_offset] != nullptr) {
+                  all_right_frames.push_back(it->second.frames_[frame_offset].get());
+                } else {
+                  all_right_frames.push_back(nullptr);
+                }
+              }
+              display_->set_all_right_frames(all_right_frames);
+            }
 
             if (display_->possibly_refresh(left_display_frame, right_display_frame, current_total_browsable)) {
               // Energy-saving gating for scope windows
