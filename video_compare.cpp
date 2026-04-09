@@ -869,8 +869,12 @@ void VideoCompare::compare() {
 
     int frame_offset = 0;
 
-    int64_t static_right_time_shift = time_shift_offset_av_time_;
-    int total_right_time_shifted = 0;
+    std::map<size_t, int64_t> per_right_time_shifts;  // right_index -> accumulated frame count offset
+
+    // Compute the effective PTS time shift for a given right video index.
+    auto compute_static_right_time_shift = [&](const size_t right_index, const int64_t right_delta_pts) -> int64_t {
+      return time_shift_offset_av_time_ + per_right_time_shifts[right_index] * right_delta_pts;
+    };
 
     int forward_navigate_frames = 0;
 
@@ -1000,22 +1004,137 @@ void VideoCompare::compare() {
         seek_from_start = false;
       }
 
+      const int step_right_frames = display_->get_step_right_frames();
+
       bool skip_update = false;
+
+      // --- Per-right-video forward stepping (+ key) ---
+      if (step_right_frames > 0 && !display_->get_play()) {
+        int frames_stepped = 0;
+
+        for (int i = 0; i < step_right_frames; i++) {
+          AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
+
+          if (converted_frame_queues_[active_right]->pop(stepped_frame)) {
+            // Update the right video's state with the new frame
+            right_ptr->frame_ = std::move(stepped_frame);
+            right_ptr->decoded_picture_number_++;
+
+            // Accumulate per-video offset
+            per_right_time_shifts[active_right_index_]++;
+            frames_stepped++;
+          } else {
+            // Queue empty — cannot step further forward
+            break;
+          }
+        }
+
+        if (frames_stepped > 0 && right_ptr->frame_ != nullptr) {
+          // Compute effective time shift for the active right video
+          const int64_t static_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
+
+          // Update frame timing for the stepped right video
+          const int64_t new_pts = right_ptr->frame_->pts - right_ptr->effective_time_shift_;
+          right_ptr->delta_pts_ = (right_ptr->pts_ != 0) ? (new_pts - right_ptr->pts_) : right_ptr->delta_pts_;
+          right_ptr->pts_ = new_pts;
+
+          // Store in the right video's frame buffer
+          if (right_ptr->frames_.size() >= frame_buffer_size_) {
+            right_ptr->frames_.pop_back();
+          }
+          right_ptr->frames_.push_front(std::move(right_ptr->frame_));
+
+          // Reset frame offset so display shows the newly stepped frame
+          frame_offset = 0;
+        }
+
+        // Notify user
+        const int64_t total_offset = per_right_time_shifts[active_right_index_];
+        display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+          active_right_index_ + 1,
+          total_offset > 0 ? "+" : "",
+          static_cast<long long>(total_offset)));
+
+        skip_update = true;
+      }
+
+      // --- Per-right-video backward stepping (- key): partial seek ---
+      if (step_right_frames < 0 && !display_->get_play()) {
+        // Accumulate per-video offset
+        per_right_time_shifts[active_right_index_] += step_right_frames;  // step_right_frames is negative
+
+        // Compute target seek position for the right video
+        const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+        const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
+
+        // --- Partial seek: only affect the current right video's pipeline ---
+
+        // 1. Stop the packet queue to halt demuxing for this side
+        packet_queues_[active_right]->stop();
+
+        // 2. Wait for the pipeline cascade to complete (all downstream queues stop)
+        while (!converted_frame_queues_[active_right]->is_stopped()) {
+          decoded_frame_queues_[active_right]->empty();
+          filtered_frame_queues_[active_right]->empty();
+          converted_frame_queues_[active_right]->empty();
+          sleep_for_ms(SLEEP_PERIOD_MS);
+        }
+
+        // 3. Final empty of all queues for this side
+        packet_queues_[active_right]->empty();
+        decoded_frame_queues_[active_right]->empty();
+        filtered_frame_queues_[active_right]->empty();
+        converted_frame_queues_[active_right]->empty();
+
+        // 4. Flush decoder to clear cached reference frames
+        video_decoders_[active_right]->flush();
+
+        // 5. Reinit filter graph for this side
+        video_filterers_[active_right]->reinit();
+
+        // 6. Seek the demuxer to the target position
+        demuxers_[active_right]->seek(right_target_position, true);
+
+        // 7. Restart all queues for this side
+        packet_queues_[active_right]->restart();
+        decoded_frame_queues_[active_right]->restart();
+        filtered_frame_queues_[active_right]->restart();
+        converted_frame_queues_[active_right]->restart();
+
+        // 8. Pop the first frame from the restarted pipeline
+        converted_frame_queues_[active_right]->pop(right_ptr->frame_);
+
+        if (right_ptr->frame_ != nullptr) {
+          right_ptr->pts_ = right_ptr->frame_->pts;
+          right_ptr->effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
+          right_ptr->pts_ -= right_ptr->effective_time_shift_;
+          right_ptr->previous_decoded_picture_number_ = -1;
+          right_ptr->decoded_picture_number_ = 1;
+
+          // Clear and re-seed the frame buffer
+          right_ptr->frames_.clear();
+          right_ptr->frames_.push_front(std::move(right_ptr->frame_));
+
+          // Reset frame offset so display shows the newly stepped frame
+          frame_offset = 0;
+        }
+
+        // Notify user
+        const int64_t total_offset = per_right_time_shifts[active_right_index_];
+        display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+          active_right_index_ + 1,
+          total_offset > 0 ? "+" : "",
+          static_cast<long long>(total_offset)));
+
+        skip_update = true;
+      }
 
       // handle pending crop request
       const bool force_seek_current_position = handle_pending_crop_request(active_right);
 
-      const int shift_right_frames = display_->get_shift_right_frames();
-
       // if seeking is required, drain packet and frame queues
-      if ((seek_relative != 0.0F) || (shift_right_frames != 0) || force_seek_current_position) {
-        // update total right time shifted
-        if (shift_right_frames != 0) {
-          total_right_time_shifted += shift_right_frames;
-        }
-
-        // compute effective time shift
-        static_right_time_shift = time_shift_offset_av_time_ + total_right_time_shifted * right_delta;
+      if ((seek_relative != 0.0F) || force_seek_current_position) {
 
         ready_to_seek_.reset_all();
         seeking_ = true;
@@ -1050,7 +1169,7 @@ void VideoCompare::compare() {
         empty_frame_queues();
 
         // update decoder mode
-        update_decoder_mode(static_right_time_shift);
+        update_decoder_mode(compute_static_right_time_shift(active_right_index_, right_delta));
 
         // consume filter changes
         consume_filter_changes();
@@ -1098,7 +1217,7 @@ void VideoCompare::compare() {
         const auto all_media_are_multi_frame = [&]() -> bool {
           return std::all_of(media_frame_detection_states_.cbegin(), media_frame_detection_states_.cend(), [](const auto& kv) { return kv.second.cardinality.load(std::memory_order_relaxed) == MediaFrameCardinality::MultiFrame; });
         };
-        const bool backward = (seek_relative < 0.0F) || (shift_right_frames != 0) || (force_seek_current_position && all_media_are_multi_frame());
+        const bool backward = (seek_relative < 0.0F) || (force_seek_current_position && all_media_are_multi_frame());
 
         auto compute_right_position = [&](const SideState& right_state) -> float { return left.pts_ * AV_TIME_TO_SEC + right_state.start_time_; };
 
@@ -1133,7 +1252,8 @@ void VideoCompare::compare() {
             next_right_position = std::max(next_right_position, min_right_position);
 
             // Add the dynamic time shift and the delta PTS to the next right position
-            next_right_position += static_right_time_shift * AV_TIME_TO_SEC;
+            const int64_t per_video_static_shift = compute_static_right_time_shift(side.right_index(), normalized_delta(right_state.delta_pts_));
+            next_right_position += per_video_static_shift * AV_TIME_TO_SEC;
             next_right_position += static_cast<float>(calculate_dynamic_time_shift(time_shift_.multiplier, (next_right_position - right_state.start_time_) / AV_TIME_TO_SEC, false)) * AV_TIME_TO_SEC;
 
 #ifdef _DEBUG
@@ -1216,20 +1336,22 @@ void VideoCompare::compare() {
 
         pop_and_reset(left);
 
-        // round away from zero to nearest 2 ms
-        if (static_right_time_shift > 0) {
-          static_right_time_shift = ((static_right_time_shift / 1000) + 2) * 1000;
-        } else if (static_right_time_shift < 0) {
-          static_right_time_shift = ((static_right_time_shift / 1000) - 2) * 1000;
-        }
-
-        // Reset all right videos after seek
+        // Reset all right videos after seek with per-video time shifts
         for (auto& pair : side_states) {
           const Side& side = pair.first;
           if (side.is_right()) {
             SideState& right_state = pair.second;
 
-            right_state.effective_time_shift_ = static_right_time_shift;
+            int64_t per_video_shift = compute_static_right_time_shift(side.right_index(), normalized_delta(right_state.delta_pts_));
+
+            // round away from zero to nearest 2 ms
+            if (per_video_shift > 0) {
+              per_video_shift = ((per_video_shift / 1000) + 2) * 1000;
+            } else if (per_video_shift < 0) {
+              per_video_shift = ((per_video_shift / 1000) - 2) * 1000;
+            }
+
+            right_state.effective_time_shift_ = per_video_shift;
             pop_and_reset(right_state, &right_state.effective_time_shift_);
           }
         }
@@ -1251,7 +1373,7 @@ void VideoCompare::compare() {
 
 #ifdef _DEBUG
       const std::string current_state = string_sprintf("left_pts=%5d, left_is_behind=%d, right_pts=%5d, right_is_behind=%d, min_delta=%5d, effective_right_time_shift=%5d", left.pts_ / 1000, is_behind(left.pts_, right_ptr->pts_, min_delta),
-                                                       (right_ptr->pts_ + static_right_time_shift) / 1000, is_behind(right_ptr->pts_, left.pts_, min_delta), min_delta / 1000, right_ptr->effective_time_shift_ / 1000);
+                                                       (right_ptr->pts_ + right_ptr->effective_time_shift_) / 1000, is_behind(right_ptr->pts_, left.pts_, min_delta), min_delta / 1000, right_ptr->effective_time_shift_ / 1000);
 
       if (current_state != previous_state) {
         std::cout << current_state << std::endl;
@@ -1308,7 +1430,7 @@ void VideoCompare::compare() {
             for (auto& pair : side_states) {
               if (pair.first.is_right()) {
                 auto& side_state = pair.second;
-                side_state.effective_time_shift_ = static_right_time_shift + calculate_dynamic_time_shift(time_shift_.multiplier, side_state.frame_->pts, true);
+                side_state.effective_time_shift_ = compute_static_right_time_shift(pair.first.right_index(), normalized_delta(side_state.delta_pts_)) + calculate_dynamic_time_shift(time_shift_.multiplier, side_state.frame_->pts, true);
               }
             }
 
