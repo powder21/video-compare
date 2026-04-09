@@ -876,6 +876,60 @@ void VideoCompare::compare() {
       return time_shift_offset_av_time_ + per_right_time_shifts[right_index] * right_delta_pts;
     };
 
+    // Partial seek: stop/drain/flush/reinit/seek/restart a single right video's pipeline,
+    // then pop the first frame and reset its state. Returns true if a frame was obtained.
+    auto partial_seek_right_video = [&](const Side& side, SideState& right_state, const int64_t effective_shift, const float target_position) -> bool {
+      // 1. Stop the packet queue to halt demuxing for this side
+      packet_queues_[side]->stop();
+
+      // 2. Wait for the pipeline cascade to complete (all downstream queues stop)
+      while (!converted_frame_queues_[side]->is_stopped()) {
+        decoded_frame_queues_[side]->empty();
+        filtered_frame_queues_[side]->empty();
+        converted_frame_queues_[side]->empty();
+        sleep_for_ms(SLEEP_PERIOD_MS);
+      }
+
+      // 3. Final empty of all queues for this side
+      packet_queues_[side]->empty();
+      decoded_frame_queues_[side]->empty();
+      filtered_frame_queues_[side]->empty();
+      converted_frame_queues_[side]->empty();
+
+      // 4. Flush decoder and reinit filter graph
+      video_decoders_[side]->flush();
+      video_filterers_[side]->reinit();
+
+      // 5. Seek the demuxer to the target position
+      demuxers_[side]->seek(target_position, true);
+
+      // 6. Restart all queues for this side
+      packet_queues_[side]->restart();
+      decoded_frame_queues_[side]->restart();
+      filtered_frame_queues_[side]->restart();
+      converted_frame_queues_[side]->restart();
+
+      // 7. Pop the first frame from the restarted pipeline
+      converted_frame_queues_[side]->pop(right_state.frame_);
+
+      if (right_state.frame_ != nullptr) {
+        right_state.pts_ = right_state.frame_->pts;
+        right_state.effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_state.frame_->pts, true);
+        right_state.pts_ -= right_state.effective_time_shift_;
+        right_state.previous_decoded_picture_number_ = -1;
+        right_state.decoded_picture_number_ = 1;
+
+        // Clear and re-seed the frame buffer
+        right_state.frames_.clear();
+        right_state.frames_.push_front(std::move(right_state.frame_));
+
+        // Reset frame offset so display shows the new frame
+        frame_offset = 0;
+        return true;
+      }
+      return false;
+    };
+
     int forward_navigate_frames = 0;
 
     bool auto_loop_triggered = false;
@@ -1056,14 +1110,14 @@ void VideoCompare::compare() {
 
           // Reset frame offset so display shows the newly stepped frame
           frame_offset = 0;
-        }
 
-        // Notify user
-        const int64_t total_offset = per_right_time_shifts[active_right_index_];
-        display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
-          active_right_index_ + 1,
-          total_offset > 0 ? "+" : "",
-          static_cast<long long>(total_offset)));
+          // Notify user
+          const int64_t total_offset = per_right_time_shifts[active_right_index_];
+          display_->notify_user(string_sprintf("Right #%zu: %s%lld frames",
+            active_right_index_ + 1,
+            total_offset > 0 ? "+" : "",
+            static_cast<long long>(total_offset)));
+        }
 
         skip_update = true;
       }
@@ -1073,61 +1127,10 @@ void VideoCompare::compare() {
         // Accumulate per-video offset
         per_right_time_shifts[active_right_index_] += step_right_frames;  // step_right_frames is negative
 
-        // Compute target seek position for the right video
+        // Compute target seek position and perform partial seek
         const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
         const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-
-        // --- Partial seek: only affect the current right video's pipeline ---
-
-        // 1. Stop the packet queue to halt demuxing for this side
-        packet_queues_[active_right]->stop();
-
-        // 2. Wait for the pipeline cascade to complete (all downstream queues stop)
-        while (!converted_frame_queues_[active_right]->is_stopped()) {
-          decoded_frame_queues_[active_right]->empty();
-          filtered_frame_queues_[active_right]->empty();
-          converted_frame_queues_[active_right]->empty();
-          sleep_for_ms(SLEEP_PERIOD_MS);
-        }
-
-        // 3. Final empty of all queues for this side
-        packet_queues_[active_right]->empty();
-        decoded_frame_queues_[active_right]->empty();
-        filtered_frame_queues_[active_right]->empty();
-        converted_frame_queues_[active_right]->empty();
-
-        // 4. Flush decoder to clear cached reference frames
-        video_decoders_[active_right]->flush();
-
-        // 5. Reinit filter graph for this side
-        video_filterers_[active_right]->reinit();
-
-        // 6. Seek the demuxer to the target position
-        demuxers_[active_right]->seek(right_target_position, true);
-
-        // 7. Restart all queues for this side
-        packet_queues_[active_right]->restart();
-        decoded_frame_queues_[active_right]->restart();
-        filtered_frame_queues_[active_right]->restart();
-        converted_frame_queues_[active_right]->restart();
-
-        // 8. Pop the first frame from the restarted pipeline
-        converted_frame_queues_[active_right]->pop(right_ptr->frame_);
-
-        if (right_ptr->frame_ != nullptr) {
-          right_ptr->pts_ = right_ptr->frame_->pts;
-          right_ptr->effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
-          right_ptr->pts_ -= right_ptr->effective_time_shift_;
-          right_ptr->previous_decoded_picture_number_ = -1;
-          right_ptr->decoded_picture_number_ = 1;
-
-          // Clear and re-seed the frame buffer
-          right_ptr->frames_.clear();
-          right_ptr->frames_.push_front(std::move(right_ptr->frame_));
-
-          // Reset frame offset so display shows the newly stepped frame
-          frame_offset = 0;
-        }
+        partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
 
         // Notify user
         const int64_t total_offset = per_right_time_shifts[active_right_index_];
@@ -1147,46 +1150,7 @@ void VideoCompare::compare() {
           // Trigger a partial seek to re-sync the right video with left's position
           const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
           const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-
-          // Partial seek (same cascade as backward stepping)
-          packet_queues_[active_right]->stop();
-
-          while (!converted_frame_queues_[active_right]->is_stopped()) {
-            decoded_frame_queues_[active_right]->empty();
-            filtered_frame_queues_[active_right]->empty();
-            converted_frame_queues_[active_right]->empty();
-            sleep_for_ms(SLEEP_PERIOD_MS);
-          }
-
-          packet_queues_[active_right]->empty();
-          decoded_frame_queues_[active_right]->empty();
-          filtered_frame_queues_[active_right]->empty();
-          converted_frame_queues_[active_right]->empty();
-
-          video_decoders_[active_right]->flush();
-          video_filterers_[active_right]->reinit();
-          demuxers_[active_right]->seek(right_target_position, true);
-
-          packet_queues_[active_right]->restart();
-          decoded_frame_queues_[active_right]->restart();
-          filtered_frame_queues_[active_right]->restart();
-          converted_frame_queues_[active_right]->restart();
-
-          converted_frame_queues_[active_right]->pop(right_ptr->frame_);
-
-          if (right_ptr->frame_ != nullptr) {
-            right_ptr->pts_ = right_ptr->frame_->pts;
-            right_ptr->effective_time_shift_ = effective_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
-            right_ptr->pts_ -= right_ptr->effective_time_shift_;
-            right_ptr->previous_decoded_picture_number_ = -1;
-            right_ptr->decoded_picture_number_ = 1;
-
-            right_ptr->frames_.clear();
-            right_ptr->frames_.push_front(std::move(right_ptr->frame_));
-
-            // Reset frame offset so display shows the reset frame
-            frame_offset = 0;
-          }
+          partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
 
           display_->notify_user(string_sprintf("Right #%zu: offset reset", active_right_index_ + 1));
         }
