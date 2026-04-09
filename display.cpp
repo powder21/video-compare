@@ -2975,7 +2975,8 @@ void Display::begin_input_frame() {
   seek_from_start_ = false;
   frame_buffer_offset_delta_ = 0;
   frame_navigation_delta_ = 0;
-  shift_right_frames_ = 0;
+  step_right_frames_ = 0;
+  reset_right_offset_ = false;
   tick_playback_ = false;
   possibly_tick_playback_ = false;
   toggle_scope_window_requested_.fill(false);
@@ -3262,7 +3263,11 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_0:
         case SDLK_KP_0:
-          subtraction_mode_ = !subtraction_mode_;
+          if (is_ctrl_down) {
+            reset_right_offset_ = true;
+          } else {
+            subtraction_mode_ = !subtraction_mode_;
+          }
           break;
         case SDLK_z:
           zoom_left_ = true;
@@ -3480,21 +3485,21 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_KP_PLUS:
         case SDLK_EQUALS:  // for tenkeyless keyboards
           if (is_alt_down) {
-            shift_right_frames_ += 100;
+            step_right_frames_ += 100;
           } else if (is_ctrl_down) {
-            shift_right_frames_ += 10;
+            step_right_frames_ += 10;
           } else {
-            shift_right_frames_++;
+            step_right_frames_++;
           }
           break;
         case SDLK_MINUS:
         case SDLK_KP_MINUS:
           if (is_alt_down) {
-            shift_right_frames_ -= 100;
+            step_right_frames_ -= 100;
           } else if (is_ctrl_down) {
-            shift_right_frames_ -= 10;
+            step_right_frames_ -= 10;
           } else {
-            shift_right_frames_--;
+            step_right_frames_--;
           }
           break;
         case SDLK_y: {
@@ -3618,8 +3623,12 @@ int Display::get_frame_navigation_delta() const {
   return frame_navigation_delta_;
 }
 
-int Display::get_shift_right_frames() const {
-  return shift_right_frames_;
+int Display::get_step_right_frames() const {
+  return step_right_frames_;
+}
+
+bool Display::get_reset_right_offset() const {
+  return reset_right_offset_;
 }
 
 float Display::get_playback_speed_factor() const {
