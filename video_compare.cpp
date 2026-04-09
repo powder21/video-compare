@@ -1424,12 +1424,14 @@ void VideoCompare::compare() {
         }
       };
 
-      // sync left with all right videos
-      for (auto& pair : side_states) {
-        if (pair.first.is_right()) {
-          SideState& right_state = pair.second;
-          sync_frame_queue(left, right_state);
-          sync_frame_queue(right_state, left);
+      // sync left with all right videos (skip after stepping to prevent left from advancing)
+      if (step_right_frames == 0) {
+        for (auto& pair : side_states) {
+          if (pair.first.is_right()) {
+            SideState& right_state = pair.second;
+            sync_frame_queue(left, right_state);
+            sync_frame_queue(right_state, left);
+          }
         }
       }
 
