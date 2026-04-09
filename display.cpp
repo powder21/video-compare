@@ -3824,9 +3824,93 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
 }
 
 void Display::render_crop_preview() {
-  // Stub: will be fully implemented in Task 4
-  SDL_SetRenderDrawColor(renderer_, 32, 32, 32, 255);
+  // Dark background
+  SDL_SetRenderDrawColor(renderer_, 24, 24, 24, 255);
   SDL_RenderClear(renderer_);
+
+  // Render the preview texture with current zoom/pan
+  if (crop_preview_texture_) {
+    const float dw_factor = drawable_to_window_width_factor_;
+    const float dh_factor = drawable_to_window_height_factor_;
+
+    const SDL_FRect dst = {
+        preview_offset_.x() * dw_factor,
+        preview_offset_.y() * dh_factor,
+        static_cast<float>(crop_preview_width_) * preview_scale_ * dw_factor,
+        static_cast<float>(crop_preview_height_) * preview_scale_ * dh_factor};
+
+    SDL_RenderCopyF(renderer_, crop_preview_texture_, nullptr, &dst);
+
+    // Draw thin vertical separator lines between panels
+    const int num_panels = 1 + static_cast<int>(crop_preview_data_.right_cutouts.size());
+    if (num_panels > 1) {
+      SDL_SetRenderDrawColor(renderer_, 200, 200, 200, 128);
+      SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+      const float panel_width = static_cast<float>(crop_preview_width_) / static_cast<float>(num_panels);
+      for (int i = 1; i < num_panels; i++) {
+        const float line_x = (preview_offset_.x() + panel_width * static_cast<float>(i) * preview_scale_) * dw_factor;
+        SDL_RenderDrawLineF(renderer_, line_x, dst.y, line_x, dst.y + dst.h);
+      }
+      SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+    }
+
+    // Render panel labels (L, R1, R2, ...) below the preview
+    {
+      const float panel_pixel_width = static_cast<float>(crop_preview_width_) / static_cast<float>(num_panels);
+
+      auto render_panel_label = [&](const int panel_index, const std::string& label) {
+        SDL_Surface* label_surface = render_text_with_fallback(label);
+        if (!label_surface) {
+          return;
+        }
+        SDL_Texture* label_texture = SDL_CreateTextureFromSurface(renderer_, label_surface);
+        if (label_texture) {
+          const float panel_center_x = (preview_offset_.x() + (static_cast<float>(panel_index) + 0.5F) * panel_pixel_width * preview_scale_) * dw_factor;
+          const float label_y = (preview_offset_.y() + static_cast<float>(crop_preview_height_) * preview_scale_) * dh_factor + 4.0F;
+          const int lw = label_surface->w;
+          const int lh = label_surface->h;
+          SDL_Rect label_rect = {static_cast<int>(panel_center_x) - lw / 2, static_cast<int>(label_y), lw, lh};
+          SDL_RenderCopy(renderer_, label_texture, nullptr, &label_rect);
+          SDL_DestroyTexture(label_texture);
+        }
+        SDL_FreeSurface(label_surface);
+      };
+
+      render_panel_label(0, "L");
+      for (int i = 0; i < num_panels - 1; i++) {
+        render_panel_label(i + 1, string_sprintf("R%d", i + 1));
+      }
+    }
+  }
+
+  // Render instruction text at bottom center
+  {
+    const std::string instructions = "Enter: Save  |  Esc: Cancel  |  Right-drag: Pan  |  Scroll: Zoom  |  R: Reset view";
+    SDL_Surface* text_surface = render_text_with_fallback(instructions);
+    if (text_surface) {
+      SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
+      if (text_texture) {
+        const int text_w = text_surface->w;
+        const int text_h = text_surface->h;
+        const int padding = 10;
+
+        // Semi-transparent background bar at bottom
+        SDL_Rect bg_rect = {0, drawable_height_ - text_h - padding * 2, drawable_width_, text_h + padding * 2};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+        SDL_RenderFillRect(renderer_, &bg_rect);
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+
+        // Center the text
+        SDL_Rect text_rect = {(drawable_width_ - text_w) / 2, drawable_height_ - text_h - padding, text_w, text_h};
+        SDL_RenderCopy(renderer_, text_texture, nullptr, &text_rect);
+
+        SDL_DestroyTexture(text_texture);
+      }
+      SDL_FreeSurface(text_surface);
+    }
+  }
+
   SDL_RenderPresent(renderer_);
 }
 
