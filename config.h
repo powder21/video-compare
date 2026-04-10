@@ -78,5 +78,7 @@ struct VideoCompareConfig {
   InputVideo left{LEFT, "Left"};
   std::vector<InputVideo> right_videos;
 
+  std::string save_dir;
+
   ScopesConfig scopes;
 };

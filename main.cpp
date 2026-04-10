@@ -566,6 +566,7 @@ int main(int argc, char** argv) {
          {"auto-loop-mode", {"-a", "--auto-loop-mode"}, "auto-loop playback when buffer fills, 'off' for continuous streaming (default), 'on' for forward-only mode, 'pp' for ping-pong mode", 1},
          {"frame-buffer-size", {"-f", "--frame-buffer-size"}, "frame buffer size (e.g. 10, 70 or 150), default is 50", 1},
          {"time-shift", {"-t", "--time-shift"}, "shift the time stamps of the right video by a user-specified time offset, optionally with a multiplier (e.g. 0.150, -0.1, x1.04+0.1, x25.025/24-1:30.5)", 1},
+         {"save-dir", {"--save-dir"}, "directory for saving images (screenshots and crop cutouts), default is the current working directory", 1},
          {"wheel-sensitivity", {"-s", "--wheel-sensitivity"}, "mouse wheel sensitivity (e.g. 0.5, -1 or 1.7), default is 1; negative values invert the input direction", 1},
          {"color-space", {"-C", "--color-space"}, "set the color space matrix, specified as [matrix] for the same on both sides, or [l-matrix?]:[r-matrix?] for different values (e.g. 'bt709' or 'bt2020nc:')", 1},
          {"color-range", {"-A", "--color-range"}, "set the color range, specified as [range] for the same on both sides, or [l-range?]:[r-range?] for different values (e.g. 'tv', ':pc' or 'pc:tv')", 1},
@@ -797,6 +798,13 @@ int main(int argc, char** argv) {
         }
 
         config.wheel_sensitivity = parse_strict_double(wheel_sensitivity_arg);
+      }
+      if (args["save-dir"]) {
+        config.save_dir = static_cast<const std::string&>(args["save-dir"]);
+        // Ensure trailing separator
+        if (!config.save_dir.empty() && config.save_dir.back() != '/' && config.save_dir.back() != '\\') {
+          config.save_dir += '/';
+        }
       }
       if (args["tone-map-mode"]) {
         auto tone_mapping_mode_spec = static_cast<const std::string&>(args["tone-map-mode"]);
