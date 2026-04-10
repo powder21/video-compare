@@ -54,11 +54,14 @@ else
 endif
 
 src = $(wildcard *.cpp)
-obj = $(src:.cpp=.o)
+obj = $(src:.cpp=.o) tinyfiledialogs.o
 dep = $(obj:.o=.d)
 target = video-compare
 
 all: $(target)
+
+tinyfiledialogs.o: tinyfiledialogs.c
+	$(CC) -c -O2 -o $@ $<
 
 $(target): $(obj)
 	$(CXX) -o $@ $^ $(LDLIBS)
