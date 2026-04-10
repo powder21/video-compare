@@ -2981,7 +2981,12 @@ void Display::handle_event(const SDL_Event& event) {
         switch (event_.key.keysym.sym) {
           case SDLK_RETURN:
           case SDLK_KP_ENTER:
-            exit_crop_preview(true);   // Confirm: save images
+            // Confirm: prompt for save directory, then save images.
+            // If the user cancels the directory picker, stay in preview
+            // so their selection isn't lost.
+            if (prompt_and_update_save_dir()) {
+              exit_crop_preview(true);
+            }
             break;
           case SDLK_ESCAPE:
             exit_crop_preview(false);  // Cancel: discard
@@ -3001,9 +3006,6 @@ void Display::handle_event(const SDL_Event& event) {
                   (static_cast<float>(window_width_) - crop_preview_width_ * preview_scale_) / 2.0F,
                   (static_cast<float>(window_height_) - crop_preview_height_ * preview_scale_) / 2.0F);
             }
-            break;
-          case SDLK_o:
-            open_save_dir_dialog();
             break;
           default:
             break;
@@ -3412,9 +3414,6 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_p:
           print_mouse_position_and_color_ = mouse_is_inside_window_;
           break;
-        case SDLK_o:
-          open_save_dir_dialog();
-          break;
         case SDLK_TAB:
           if (is_shift_down) {
             active_right_index_ = (active_right_index_ + num_right_videos_ - 1) % num_right_videos_;
@@ -3723,21 +3722,17 @@ void Display::set_all_right_file_names(const std::vector<std::string>& file_name
   all_right_file_names_ = file_names;
 }
 
-void Display::set_save_dir(const std::string& save_dir) {
-  save_dir_ = save_dir;
-}
-
-void Display::open_save_dir_dialog() {
+bool Display::prompt_and_update_save_dir() {
   const char* result = tinyfd_selectFolderDialog("Select save directory", save_dir_.empty() ? nullptr : save_dir_.c_str());
-  if (result) {
-    save_dir_ = result;
-    // Ensure trailing separator
-    if (!save_dir_.empty() && save_dir_.back() != '/' && save_dir_.back() != '\\') {
-      save_dir_ += '/';
-    }
-    set_pending_message("Save directory: " + save_dir_);
-    std::cout << "Save directory set to: " << save_dir_ << std::endl;
+  if (!result) {
+    return false;
   }
+  save_dir_ = result;
+  // Ensure trailing separator
+  if (!save_dir_.empty() && save_dir_.back() != '/' && save_dir_.back() != '\\') {
+    save_dir_ += '/';
+  }
+  return true;
 }
 
 void Display::enter_crop_preview(const AVFrame* left_frame) {
@@ -3964,7 +3959,7 @@ void Display::render_crop_preview() {
 
   // Render instruction text at bottom center
   {
-    const std::string instructions = "[Enter] Save  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset  |  [O] Save dir";
+    const std::string instructions = "[Enter] Choose dir & save  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset";
     SDL_Surface* text_surface = render_text_with_fallback(instructions);
     if (text_surface) {
       SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);

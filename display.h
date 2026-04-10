@@ -468,6 +468,7 @@ class Display {
   void exit_crop_preview(bool save);
   void save_crop_preview_images();
   void destroy_crop_preview();
+  bool prompt_and_update_save_dir();
 
   float compute_zoom_factor(const float zoom_level) const;
   Vector2D compute_relative_move_offset(const Vector2D& zoom_point, const float zoom_factor) const;
@@ -571,7 +572,4 @@ class Display {
 
   void set_all_right_frames(const std::vector<const AVFrame*>& frames);
   void set_all_right_file_names(const std::vector<std::string>& file_names);
-
-  void set_save_dir(const std::string& save_dir);
-  void open_save_dir_dialog();
 };
