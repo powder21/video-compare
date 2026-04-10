@@ -2,6 +2,8 @@
 #include <libgen.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <ctime>
 #include <future>
 #include <iomanip>
 #include <iostream>
@@ -4028,12 +4030,22 @@ void Display::save_crop_preview_images(const bool save_all) {
     return write_png(frame, filename, error_occurred);
   };
 
+  // Generate a timestamp prefix shared by every file in this save batch.
+  // Format YYYYMMDD_HHMMSS: sortable, compact, and groups all files from a
+  // single Shift+Enter save together. Prevents accidental overwrites when the
+  // same video pair is cropped and saved repeatedly.
+  char timestamp_buf[32];
+  const std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm local_tm = *std::localtime(&now_time);
+  std::strftime(timestamp_buf, sizeof(timestamp_buf), "%Y%m%d_%H%M%S", &local_tm);
+  const std::string ts(timestamp_buf);
+
   // Compute file stems
   const std::string left_stem = strip_ffmpeg_patterns(get_file_stem(left_file_name_));
   const int num = saved_selected_image_number_;
 
   // The concat image is always saved.
-  const std::string concat_filename = string_sprintf("%s%s_cutout_concat_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
+  const std::string concat_filename = string_sprintf("%s%s_%s_cutout_concat_%04d.png", save_dir_.c_str(), ts.c_str(), left_stem.c_str(), num);
 
   // Per-side filenames are only built when saving everything.
   std::string left_filename;
@@ -4062,8 +4074,8 @@ void Display::save_crop_preview_images(const bool save_all) {
         (right_stems[valid_indices[0]] == left_stem);
 
     left_filename = single_right_stem_equals_left
-        ? string_sprintf("%s%s_left_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num)
-        : string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
+        ? string_sprintf("%s%s_%s_left_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), left_stem.c_str(), num)
+        : string_sprintf("%s%s_%s_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), left_stem.c_str(), num);
 
     for (size_t vi = 0; vi < valid_indices.size(); vi++) {
       const size_t orig_idx = valid_indices[vi];
@@ -4071,12 +4083,12 @@ void Display::save_crop_preview_images(const bool save_all) {
 
       if (valid_indices.size() == 1) {
         if (single_right_stem_equals_left) {
-          right_filenames.push_back(string_sprintf("%s%s_right_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+          right_filenames.push_back(string_sprintf("%s%s_%s_right_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), stem.c_str(), num));
         } else {
-          right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+          right_filenames.push_back(string_sprintf("%s%s_%s_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), stem.c_str(), num));
         }
       } else {
-        right_filenames.push_back(string_sprintf("%s%s_right%zu_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), orig_idx + 1, num));
+        right_filenames.push_back(string_sprintf("%s%s_%s_right%zu_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), stem.c_str(), orig_idx + 1, num));
       }
     }
   }
