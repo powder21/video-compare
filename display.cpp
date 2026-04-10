@@ -16,6 +16,7 @@
 #include "ffmpeg.h"
 #include "format_converter.h"
 #include "png_saver.h"
+#include "tinyfiledialogs.h"
 #include "scope_window.h"
 #include "source_code_pro_regular_ttf.h"
 #include "version.h"
@@ -1355,9 +1356,9 @@ void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_
   const std::string& left_stem = side_ui_[displayed_left_side_.as_simple_index()].file_stem;
   const std::string& right_stem = side_ui_[displayed_right_side_.as_simple_index()].file_stem;
   const bool stems_equal = (left_stem == right_stem);
-  const std::string left_filename = string_sprintf("%s%s_%04d.png", left_stem.c_str(), stems_equal ? "_left" : "", saved_image_number_);
-  const std::string right_filename = string_sprintf("%s%s_%04d.png", right_stem.c_str(), stems_equal ? "_right" : "", saved_image_number_);
-  const std::string osd_filename = string_sprintf("%s_%s_osd_%04d.png", left_stem.c_str(), right_stem.c_str(), saved_image_number_);
+  const std::string left_filename = string_sprintf("%s%s%s_%04d.png", save_dir_.c_str(), left_stem.c_str(), stems_equal ? "_left" : "", saved_image_number_);
+  const std::string right_filename = string_sprintf("%s%s%s_%04d.png", save_dir_.c_str(), right_stem.c_str(), stems_equal ? "_right" : "", saved_image_number_);
+  const std::string osd_filename = string_sprintf("%s%s_%s_osd_%04d.png", save_dir_.c_str(), left_stem.c_str(), right_stem.c_str(), saved_image_number_);
 
   auto save_frame = [&](const AVFrame* frame, const std::string& filename) { return write_png(frame, filename, error_occurred); };
 
@@ -3001,6 +3002,9 @@ void Display::handle_event(const SDL_Event& event) {
                   (static_cast<float>(window_height_) - crop_preview_height_ * preview_scale_) / 2.0F);
             }
             break;
+          case SDLK_o:
+            open_save_dir_dialog();
+            break;
           default:
             break;
         }
@@ -3408,6 +3412,9 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_p:
           print_mouse_position_and_color_ = mouse_is_inside_window_;
           break;
+        case SDLK_o:
+          open_save_dir_dialog();
+          break;
         case SDLK_TAB:
           if (is_shift_down) {
             active_right_index_ = (active_right_index_ + num_right_videos_ - 1) % num_right_videos_;
@@ -3716,6 +3723,23 @@ void Display::set_all_right_file_names(const std::vector<std::string>& file_name
   all_right_file_names_ = file_names;
 }
 
+void Display::set_save_dir(const std::string& save_dir) {
+  save_dir_ = save_dir;
+}
+
+void Display::open_save_dir_dialog() {
+  const char* result = tinyfd_selectFolderDialog("Select save directory", save_dir_.empty() ? nullptr : save_dir_.c_str());
+  if (result) {
+    save_dir_ = result;
+    // Ensure trailing separator
+    if (!save_dir_.empty() && save_dir_.back() != '/' && save_dir_.back() != '\\') {
+      save_dir_ += '/';
+    }
+    set_pending_message("Save directory: " + save_dir_);
+    std::cout << "Save directory set to: " << save_dir_ << std::endl;
+  }
+}
+
 void Display::enter_crop_preview(const AVFrame* left_frame) {
   const SDL_Rect selection_rect = get_left_selection_rect();
 
@@ -3926,7 +3950,7 @@ void Display::render_crop_preview() {
 
   // Render instruction text at bottom center
   {
-    const std::string instructions = "Enter: Save  |  Esc: Cancel  |  Right-drag: Pan  |  Scroll: Zoom  |  R: Reset view";
+    const std::string instructions = "Enter: Save  |  Esc: Cancel  |  Right-drag: Pan  |  Scroll: Zoom  |  R: Reset  |  O: Save dir";
     SDL_Surface* text_surface = render_text_with_fallback(instructions);
     if (text_surface) {
       SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
@@ -4015,13 +4039,13 @@ void Display::save_crop_preview_images() {
 
     // If there's only one right video, don't add an index suffix
     if (valid_indices.size() == 1) {
-      right_filenames.push_back(string_sprintf("%s_cutout_%04d.png", stem.c_str(), num));
+      right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
     } else {
-      right_filenames.push_back(string_sprintf("%s_right%zu_cutout_%04d.png", stem.c_str(), orig_idx + 1, num));
+      right_filenames.push_back(string_sprintf("%s%s_right%zu_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), orig_idx + 1, num));
     }
   }
 
-  const std::string concat_filename = string_sprintf("%s_cutout_concat_%04d.png", left_stem.c_str(), num);
+  const std::string concat_filename = string_sprintf("%s%s_cutout_concat_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
 
   // Save all images in parallel using threads
   std::vector<std::thread> save_threads;

@@ -59,6 +59,7 @@ static const std::vector<ControlSection> control_sections{
       {"Shift+M", "Cycle display mode"},
       {"Shift+S", "Cycle aspect view mode"},
       {"Shift+F", "Select a region, preview crop, then save cutouts as PNGs"},
+      {"O", "Open directory picker for image save location"},
       {"Shift+X", "Print display state to console"},
       {"Shift+W", "Restore saved window size"},
       {"Ctrl+W", "Restore startup window size"},

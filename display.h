@@ -364,6 +364,7 @@ class Display {
   size_t active_right_index_{0};
   std::string left_file_name_;
   std::string right_file_name_;
+  std::string save_dir_;
   std::string last_window_title_;
 
   std::vector<SDL_Texture*> help_textures_;
@@ -566,4 +567,7 @@ class Display {
 
   void set_all_right_frames(const std::vector<const AVFrame*>& frames);
   void set_all_right_file_names(const std::vector<std::string>& file_names);
+
+  void set_save_dir(const std::string& save_dir);
+  void open_save_dir_dialog();
 };
