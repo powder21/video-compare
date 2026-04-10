@@ -3784,6 +3784,20 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
     return;
   }
 
+  // Create left cutout
+  crop_preview_data_.left_cutout = create_frame(selection_rect.w, selection_rect.h, left_frame);
+  if (!crop_preview_data_.left_cutout) {
+    std::cerr << "Failed to allocate left cutout frame." << std::endl;
+    destroy_crop_preview();
+    return;
+  }
+  for (int y = 0; y < selection_rect.h; y++) {
+    const int src_y = selection_rect.y + y;
+    memcpy(crop_preview_data_.left_cutout->data[0] + y * crop_preview_data_.left_cutout->linesize[0],
+           left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size,
+           selection_rect.w * pixel_size);
+  }
+
   // Create individual right cutouts
   for (const auto* right_frame : valid_right_frames) {
     AVFrame* cutout = create_frame(selection_rect.w, selection_rect.h, right_frame);
@@ -4032,14 +4046,31 @@ void Display::save_crop_preview_images() {
   }
 
   const int num = saved_selected_image_number_;
+
+  // Detect collision: single right video whose stem equals the left stem.
+  // In that case, use _left/_right suffixes to disambiguate.
+  const bool single_right_stem_equals_left =
+      (valid_indices.size() == 1) &&
+      (valid_indices[0] < right_stems.size()) &&
+      (right_stems[valid_indices[0]] == left_stem);
+
+  // Left cutout filename
+  const std::string left_filename = single_right_stem_equals_left
+      ? string_sprintf("%s%s_left_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num)
+      : string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
+
+  // Right cutout filenames
   std::vector<std::string> right_filenames;
   for (size_t vi = 0; vi < valid_indices.size(); vi++) {
     const size_t orig_idx = valid_indices[vi];
     const std::string& stem = (orig_idx < right_stems.size()) ? right_stems[orig_idx] : "unknown";
 
-    // If there's only one right video, don't add an index suffix
     if (valid_indices.size() == 1) {
-      right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+      if (single_right_stem_equals_left) {
+        right_filenames.push_back(string_sprintf("%s%s_right_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+      } else {
+        right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+      }
     } else {
       right_filenames.push_back(string_sprintf("%s%s_right%zu_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), orig_idx + 1, num));
     }
@@ -4049,6 +4080,11 @@ void Display::save_crop_preview_images() {
 
   // Save all images in parallel using threads
   std::vector<std::thread> save_threads;
+
+  // Save left cutout
+  if (crop_preview_data_.left_cutout) {
+    save_threads.emplace_back(save_frame, crop_preview_data_.left_cutout, left_filename);
+  }
 
   // Save individual right cutouts
   for (size_t i = 0; i < crop_preview_data_.right_cutouts.size() && i < right_filenames.size(); i++) {
@@ -4065,17 +4101,14 @@ void Display::save_crop_preview_images() {
 
   if (!error_occurred) {
     // Build notification message
-    std::string saved_files;
+    std::string saved_files = left_filename;
     for (size_t i = 0; i < right_filenames.size(); i++) {
-      if (i > 0) {
-        saved_files += ", ";
-      }
-      saved_files += right_filenames[i];
+      saved_files += ", " + right_filenames[i];
     }
     saved_files += ", " + concat_filename;
 
     const std::string message = string_sprintf("Saved %zu images: %s",
-                                               right_filenames.size() + 1, saved_files.c_str());
+                                               right_filenames.size() + 2, saved_files.c_str());
     set_pending_message(message);
     std::cout << message << std::endl;
 

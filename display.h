@@ -286,10 +286,14 @@ class Display {
 
   // Stored cropped frames for deferred saving
   struct CropPreviewData {
-    std::vector<AVFrame*> right_cutouts;   // N individual right cutouts
+    AVFrame* left_cutout{nullptr};          // left video cutout
+    std::vector<AVFrame*> right_cutouts;    // N individual right cutouts
     AVFrame* concatenated{nullptr};         // left + all rights side-by-side
 
     void free_all() {
+      if (left_cutout) {
+        av_frame_free(&left_cutout);
+      }
       for (auto& f : right_cutouts) {
         if (f) {
           av_frame_free(&f);
