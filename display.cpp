@@ -2980,14 +2980,18 @@ void Display::handle_event(const SDL_Event& event) {
       case SDL_KEYDOWN:
         switch (event_.key.keysym.sym) {
           case SDLK_RETURN:
-          case SDLK_KP_ENTER:
-            // Confirm: prompt for save directory, then save images.
+          case SDLK_KP_ENTER: {
+            // Confirm: prompt for save directory, then save.
+            // Shift+Enter saves N+2 images (left + N right + concat).
+            // Plain Enter saves just the concat image.
             // If the user cancels the directory picker, stay in preview
             // so their selection isn't lost.
+            const bool save_all = (event_.key.keysym.mod & KMOD_SHIFT) != 0;
             if (prompt_and_update_save_dir()) {
-              exit_crop_preview(true);
+              exit_crop_preview(true, save_all);
             }
             break;
+          }
           case SDLK_ESCAPE:
             exit_crop_preview(false);  // Cancel: discard
             break;
@@ -3959,7 +3963,7 @@ void Display::render_crop_preview() {
 
   // Render instruction text at bottom center
   {
-    const std::string instructions = "[Enter] Choose dir & save  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset";
+    const std::string instructions = "[Enter] Save concat  |  [Shift+Enter] Save all  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset";
     SDL_Surface* text_surface = render_text_with_fallback(instructions);
     if (text_surface) {
       SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
@@ -3998,13 +4002,13 @@ void Display::destroy_crop_preview() {
   crop_preview_height_ = 0;
 }
 
-void Display::exit_crop_preview(const bool save) {
+void Display::exit_crop_preview(const bool save, const bool save_all) {
   if (crop_preview_mode_ != CropPreviewMode::Active) {
     return;
   }
 
   if (save) {
-    save_crop_preview_images();
+    save_crop_preview_images(save_all);
   } else {
     set_pending_message("Crop preview cancelled");
     std::cout << "Crop preview cancelled" << std::endl;
@@ -4017,7 +4021,7 @@ void Display::exit_crop_preview(const bool save) {
   SDL_SetCursor(normal_mode_cursor_);
 }
 
-void Display::save_crop_preview_images() {
+void Display::save_crop_preview_images(const bool save_all) {
   std::atomic_bool error_occurred(false);
 
   auto save_frame = [&](const AVFrame* frame, const std::string& filename) {
@@ -4026,68 +4030,71 @@ void Display::save_crop_preview_images() {
 
   // Compute file stems
   const std::string left_stem = strip_ffmpeg_patterns(get_file_stem(left_file_name_));
-  std::vector<std::string> right_stems;
-  for (const auto& fn : all_right_file_names_) {
-    right_stems.push_back(strip_ffmpeg_patterns(get_file_stem(fn)));
-  }
-
-  // Build mapping from cutout index to original right video index
-  // (all_right_frames_ may have nullptr entries that were skipped during preview creation)
-  std::vector<size_t> valid_indices;
-  for (size_t i = 0; i < all_right_frames_.size(); i++) {
-    if (all_right_frames_[i] != nullptr) {
-      valid_indices.push_back(i);
-    }
-  }
-
   const int num = saved_selected_image_number_;
 
-  // Detect collision: single right video whose stem equals the left stem.
-  // In that case, use _left/_right suffixes to disambiguate.
-  const bool single_right_stem_equals_left =
-      (valid_indices.size() == 1) &&
-      (valid_indices[0] < right_stems.size()) &&
-      (right_stems[valid_indices[0]] == left_stem);
+  // The concat image is always saved.
+  const std::string concat_filename = string_sprintf("%s%s_cutout_concat_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
 
-  // Left cutout filename
-  const std::string left_filename = single_right_stem_equals_left
-      ? string_sprintf("%s%s_left_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num)
-      : string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
-
-  // Right cutout filenames
+  // Per-side filenames are only built when saving everything.
+  std::string left_filename;
   std::vector<std::string> right_filenames;
-  for (size_t vi = 0; vi < valid_indices.size(); vi++) {
-    const size_t orig_idx = valid_indices[vi];
-    const std::string& stem = (orig_idx < right_stems.size()) ? right_stems[orig_idx] : "unknown";
 
-    if (valid_indices.size() == 1) {
-      if (single_right_stem_equals_left) {
-        right_filenames.push_back(string_sprintf("%s%s_right_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
-      } else {
-        right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+  if (save_all) {
+    std::vector<std::string> right_stems;
+    for (const auto& fn : all_right_file_names_) {
+      right_stems.push_back(strip_ffmpeg_patterns(get_file_stem(fn)));
+    }
+
+    // Build mapping from cutout index to original right video index
+    // (all_right_frames_ may have nullptr entries that were skipped during preview creation)
+    std::vector<size_t> valid_indices;
+    for (size_t i = 0; i < all_right_frames_.size(); i++) {
+      if (all_right_frames_[i] != nullptr) {
+        valid_indices.push_back(i);
       }
-    } else {
-      right_filenames.push_back(string_sprintf("%s%s_right%zu_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), orig_idx + 1, num));
+    }
+
+    // Detect collision: single right video whose stem equals the left stem.
+    // In that case, use _left/_right suffixes to disambiguate.
+    const bool single_right_stem_equals_left =
+        (valid_indices.size() == 1) &&
+        (valid_indices[0] < right_stems.size()) &&
+        (right_stems[valid_indices[0]] == left_stem);
+
+    left_filename = single_right_stem_equals_left
+        ? string_sprintf("%s%s_left_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num)
+        : string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
+
+    for (size_t vi = 0; vi < valid_indices.size(); vi++) {
+      const size_t orig_idx = valid_indices[vi];
+      const std::string& stem = (orig_idx < right_stems.size()) ? right_stems[orig_idx] : "unknown";
+
+      if (valid_indices.size() == 1) {
+        if (single_right_stem_equals_left) {
+          right_filenames.push_back(string_sprintf("%s%s_right_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+        } else {
+          right_filenames.push_back(string_sprintf("%s%s_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), num));
+        }
+      } else {
+        right_filenames.push_back(string_sprintf("%s%s_right%zu_cutout_%04d.png", save_dir_.c_str(), stem.c_str(), orig_idx + 1, num));
+      }
     }
   }
 
-  const std::string concat_filename = string_sprintf("%s%s_cutout_concat_%04d.png", save_dir_.c_str(), left_stem.c_str(), num);
-
-  // Save all images in parallel using threads
+  // Save requested images in parallel using threads
   std::vector<std::thread> save_threads;
 
-  // Save left cutout
-  if (crop_preview_data_.left_cutout) {
-    save_threads.emplace_back(save_frame, crop_preview_data_.left_cutout, left_filename);
-  }
-
-  // Save individual right cutouts
-  for (size_t i = 0; i < crop_preview_data_.right_cutouts.size() && i < right_filenames.size(); i++) {
-    save_threads.emplace_back(save_frame, crop_preview_data_.right_cutouts[i], right_filenames[i]);
-  }
-
-  // Save concatenated image
+  // Concat is always saved.
   save_threads.emplace_back(save_frame, crop_preview_data_.concatenated, concat_filename);
+
+  if (save_all) {
+    if (crop_preview_data_.left_cutout) {
+      save_threads.emplace_back(save_frame, crop_preview_data_.left_cutout, left_filename);
+    }
+    for (size_t i = 0; i < crop_preview_data_.right_cutouts.size() && i < right_filenames.size(); i++) {
+      save_threads.emplace_back(save_frame, crop_preview_data_.right_cutouts[i], right_filenames[i]);
+    }
+  }
 
   // Wait for all saves to complete
   for (auto& t : save_threads) {
@@ -4096,14 +4103,16 @@ void Display::save_crop_preview_images() {
 
   if (!error_occurred) {
     // Build notification message
-    std::string saved_files = left_filename;
-    for (size_t i = 0; i < right_filenames.size(); i++) {
-      saved_files += ", " + right_filenames[i];
+    std::string message;
+    if (save_all) {
+      std::string saved_files = concat_filename + ", " + left_filename;
+      for (const auto& fn : right_filenames) {
+        saved_files += ", " + fn;
+      }
+      message = string_sprintf("Saved %zu images: %s", right_filenames.size() + 2, saved_files.c_str());
+    } else {
+      message = string_sprintf("Saved concat image: %s", concat_filename.c_str());
     }
-    saved_files += ", " + concat_filename;
-
-    const std::string message = string_sprintf("Saved %zu images: %s",
-                                               right_filenames.size() + 2, saved_files.c_str());
     set_pending_message(message);
     std::cout << message << std::endl;
 
