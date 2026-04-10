@@ -344,7 +344,6 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
                                        config_.start_in_fullscreen, config_.left.file_name, right_file_name);
   display_->set_num_right_videos(right_video_info_.size());
   display_->set_active_right_index(active_right_index_);
-  display_->set_save_dir(config_.save_dir);
   {
     std::vector<std::string> all_right_names;
     for (size_t i = 0; i < right_video_info_.size(); i++) {
