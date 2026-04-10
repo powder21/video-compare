@@ -1060,15 +1060,6 @@ void VideoCompare::compare() {
 
         display_->update_right_video(right_video_info_[active_right].file_name, right_video_info_[active_right].metadata);
         scope_update_state_.reset();
-
-        // Show current offset when switching to a right video
-        const int64_t switched_offset = per_right_time_shifts[active_right_index_];
-        if (switched_offset != 0) {
-          notify_step(string_sprintf("Right #%zu: %s%lld frames",
-            active_right_index_ + 1,
-            switched_offset > 0 ? "+" : "",
-            static_cast<long long>(switched_offset)));
-        }
       }
       // Update format converter flags for all videos
       for (auto& pair : format_converters_) {
