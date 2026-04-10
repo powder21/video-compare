@@ -3950,7 +3950,7 @@ void Display::render_crop_preview() {
 
   // Render instruction text at bottom center
   {
-    const std::string instructions = "Enter: Save  |  Esc: Cancel  |  Right-drag: Pan  |  Scroll: Zoom  |  R: Reset  |  O: Save dir";
+    const std::string instructions = "[Enter] Save  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset  |  [O] Save dir";
     SDL_Surface* text_surface = render_text_with_fallback(instructions);
     if (text_surface) {
       SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
