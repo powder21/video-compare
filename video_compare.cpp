@@ -978,6 +978,7 @@ void VideoCompare::compare() {
     double next_refresh_at = 0;
 
     const bool log_event_routing = env_flag_enabled("VIDEO_COMPARE_LOG_EVENT_ROUTING");
+    bool was_playing = false;
 
     for (uint64_t frame_number = 0;; ++frame_number) {
       // Set FPS message if needed
@@ -1193,9 +1194,17 @@ void VideoCompare::compare() {
         const int64_t new_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
 
         if (new_front_pts == old_front_pts) {
-          // Didn't move — undo the offset change and notify boundary
+          // Didn't move — undo the offset change
           per_right_time_shifts[active_right_index_] -= step_right_frames;  // undo (subtract negative = add)
-          notify_step(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
+
+          // Only report "reached start" when the current frame is genuinely the
+          // first decoded frame of the video.  When the drain in
+          // partial_seek_right_video transiently fails to produce frames the PTS
+          // stays the same, but we are NOT necessarily at the start — suppress the
+          // misleading notification in that case.
+          if (right_ptr->first_pts_ > INT64_MIN && new_front_pts <= right_ptr->first_pts_) {
+            notify_step(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
+          }
         } else {
           // Notify user with current offset
           const int64_t total_offset = per_right_time_shifts[active_right_index_];
@@ -1220,6 +1229,27 @@ void VideoCompare::compare() {
 
           notify_step(string_sprintf("Right #%zu: offset reset", active_right_index_ + 1));
         }
+      }
+
+      // When resuming playback after per-right stepping, the right video's
+      // pipeline may still be producing frames from the pre-step position
+      // (fast-path backward steps only manipulate the frame buffer, not the
+      // pipeline).  Re-align every stepped right video so the first popped
+      // frame matches the current display position.
+      {
+        const bool now_playing = display_->get_play();
+        if (now_playing && !was_playing) {
+          for (auto& shift_pair : per_right_time_shifts) {
+            if (shift_pair.second != 0) {
+              const Side side = Side::Right(shift_pair.first);
+              SideState& rs = side_states.at(side);
+              const int64_t eff = compute_static_right_time_shift(shift_pair.first, normalized_delta(rs.delta_pts_));
+              const float target = left.pts_ * AV_TIME_TO_SEC + rs.start_time_ + eff * AV_TIME_TO_SEC;
+              partial_seek_right_video(side, rs, eff, target);
+            }
+          }
+        }
+        was_playing = now_playing;
       }
 
       // handle pending crop request
