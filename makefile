@@ -4,14 +4,21 @@ CXXFLAGS = -g3 -Ofast -std=c++14 -D__STDC_CONSTANT_MACROS \
 		   -Woverloaded-virtual -Wno-unused -Wno-missing-field-initializers
 
 ifneq ($(filter MINGW%,$(shell uname)),)
-  FFMPEG_VERSION = 8.1-full_build-shared
   SDL2_VERSION = 2.32.10
   SDL2_TTF_VERSION = 2.24.0
 
-  FFMPEG_PATH = ffmpeg-$(FFMPEG_VERSION)
+  # download_and_extract_windows_deps.sh always fetches the latest FFmpeg build,
+  # so discover whichever version was extracted rather than pinning one here.
+  # Newest-first, matching how the script itself picks the bundle it just wrote.
+  FFMPEG_PATH := $(shell ls -dt ffmpeg-*-full_build-shared 2>/dev/null | head -n 1)
   SDL2_PATH = SDL2-devel-$(SDL2_VERSION)-mingw/SDL2-$(SDL2_VERSION)/x86_64-w64-mingw32
   SDL2_TTF_PATH = SDL2_ttf-devel-$(SDL2_TTF_VERSION)-mingw/SDL2_ttf-$(SDL2_TTF_VERSION)/x86_64-w64-mingw32
 
+  ifeq ($(FFMPEG_PATH),)
+    $(error No ffmpeg-*-full_build-shared directory found; run ./download_and_extract_windows_deps.sh ffmpeg)
+  endif
+
+  CC = x86_64-w64-mingw32-gcc
   CXX = x86_64-w64-mingw32-g++
   CXXFLAGS += -I$(FFMPEG_PATH)/include/ \
               -I$(SDL2_PATH)/include/ \
@@ -20,6 +27,9 @@ ifneq ($(filter MINGW%,$(shell uname)),)
   LDLIBS += -L$(FFMPEG_PATH)/lib/ \
             -L$(SDL2_PATH)/lib/ \
             -L$(SDL2_TTF_PATH)/lib/
+  # tinyfiledialogs needs these for GetSaveFileNameW/GetOpenFileNameW and
+  # CoInitializeEx; MinGW links shell32/user32 by default but not these.
+  LDLIBS += -lcomdlg32 -lole32
 else
   CXX = g++
   LDLIBS = -pthread
