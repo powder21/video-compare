@@ -886,6 +886,13 @@ void VideoCompare::compare() {
     // Partial seek: stop/drain/flush/reinit/seek/restart a single right video's pipeline,
     // then drain frames until reaching the target position. Returns true if a frame was obtained.
     auto partial_seek_right_video = [&](const Side& side, SideState& right_state, const int64_t effective_shift, const float target_position) -> bool {
+      // 0. Give this side its own decode.  The stop cascade awaited in step 2 is
+      // propagated by the side's decoder thread, which stays parked for as long
+      // as single_decoder_mode_ is set, so the wait would never complete.  A
+      // partial seek always moves this right video off the left's position and
+      // therefore cannot share the left's decoded frames anyway.
+      single_decoder_mode_ = false;
+
       // 1. Stop the packet queue to halt demuxing for this side
       packet_queues_[side]->stop();
 
