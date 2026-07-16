@@ -28,6 +28,7 @@ class Queue {
   bool push(T&& data);
   bool push(const T& data);
   bool pop(T& data);
+  bool try_pop(T& data);
 
   void restart();
   void stop();
@@ -98,6 +99,22 @@ bool Queue<T>::pop(T& data) {
   }
 
   return false;
+}
+
+// Unlike pop, returns false instead of waiting when no data is available yet.
+template <class T>
+bool Queue<T>::try_pop(T& data) {
+  std::unique_lock<std::mutex> lock(mutex_);
+
+  if (queue_.empty()) {
+    return false;
+  }
+
+  data = std::move(queue_.front());
+  queue_.pop();
+
+  full_.notify_all();
+  return true;
 }
 
 template <class T>

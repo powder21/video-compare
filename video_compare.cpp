@@ -1111,7 +1111,21 @@ void VideoCompare::compare() {
         for (int i = 0; i < step_right_frames; i++) {
           AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
 
-          if (converted_frame_queues_[active_right]->pop(stepped_frame)) {
+          // In single decoder mode this video has no pipeline of its own: its frames
+          // arrive through the left decoder's fan-out, which stalls while paused once
+          // the left pipeline fills up.  So once the frames already in flight have
+          // been consumed the queue never refills and the pop below would block
+          // forever; give the video its own pipeline instead.  Seeking is deferred
+          // to here rather than done up front because it re-decodes from the
+          // preceding keyframe, and partial_seek_right_video clears the mode, so the
+          // cost is paid at most once and only if stepping runs past the buffer.
+          if (single_decoder_mode_ && !converted_frame_queues_[active_right]->try_pop(stepped_frame)) {
+            const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+            const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
+            partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
+          }
+
+          if (stepped_frame != nullptr || converted_frame_queues_[active_right]->pop(stepped_frame)) {
             // Update the right video's state with the new frame
             right_ptr->frame_ = std::move(stepped_frame);
             right_ptr->decoded_picture_number_++;
