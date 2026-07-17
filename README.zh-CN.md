@@ -19,43 +19,39 @@
 ### macOS / Linux — 从源码编译
 
 ```sh
-# macOS
-brew install ffmpeg sdl2 sdl2_ttf
-# Debian/Ubuntu
-apt install build-essential libavformat-dev libavcodec-dev libavfilter-dev \
-            libavutil-dev libswscale-dev libswresample-dev libsdl2-dev libsdl2-ttf-dev
-# Fedora
-dnf install make gcc-c++ ffmpeg-devel SDL2-devel SDL2_ttf-devel
-
 git clone https://github.com/powder21/video-compare.git
 cd video-compare
 git checkout v1.2
-make -j4
-make install        # 装到 /opt/homebrew/bin 或 /usr/local/bin
+./install.sh
 ```
 
+脚本会装缺失的依赖(已装的不动,即使来自别的 tap)、编译、安装到 `/opt/homebrew/bin`
+或 `/usr/local/bin`。macOS 上它还会检查 SDL2 是否一致,不一致就自动修好 —— 见下。
+
 <details>
-<summary><b>编译成功但运行异常(崩溃 / 窗口打不开)—— 可能装了两个 SDL2</b></summary>
+<summary><b>install.sh 在 macOS 上多做的那件事:两个 SDL2</b></summary>
 
 Homebrew 的 `sdl2` 现在是 `sdl2-compat`(SDL2-on-SDL3 垫片)的别名。若机器上还留着迁移前的旧
 `sdl2`,主程序和 `libSDL2_ttf` 可能各链一个,**同一进程里载入两个 SDL2 实现**。
 `--version` 不碰 SDL,照跑不误,所以这个状态不会自己暴露。
 
+脚本以 **`libSDL2_ttf` 为准**(它是预编译的,改不动),把主程序 link 到同一个再重编。
+全新机器上两边都是 `sdl2-compat`,一致,不会触发。
+
+手动做的话:
+
 ```sh
 P='/opt/homebrew/opt/sdl2[^/]*/lib/libSDL2-2\.0\.0\.dylib'
 otool -L video-compare | grep -oE "$P"
 otool -L "$(brew --prefix sdl2_ttf)/lib/libSDL2_ttf-2.0.0.dylib" | grep -oE "$P"
+# 两条不同的话(下面的 <formula> 填 libSDL2_ttf 那条里的):
+brew unlink sdl2 sdl2-compat; brew link --overwrite <formula>; make -B && make install
 ```
-
-两条输出**不同**就是中招了。修复:
-
-```sh
-brew unlink sdl2-compat && brew link --overwrite sdl2 && make -B && make install
-```
-
-全新机器只会装到 `sdl2-compat`,两边一致,不受影响。
 
 </details>
+
+不想用脚本的话,`brew install ffmpeg sdl2 sdl2_ttf`(Linux 见 `install.sh` 里的
+apt/dnf 命令)之后 `make -j4 && make install` 即可。
 
 ### 构建产物
 
