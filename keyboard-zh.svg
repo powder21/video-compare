@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 874 440" width="874" height="440" font-family="-apple-system,'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif">
+<rect width="874" height="440" fill="#ffffff" rx="8"/>
+<rect x="14" y="14" width="62" height="58" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="45" y="36" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Esc</text>
+<text x="45" y="57" font-size="11" fill="#475569" text-anchor="middle">退出</text>
+<rect x="148" y="14" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="179" y="36" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">F1</text>
+<text x="179" y="57" font-size="11" fill="#475569" text-anchor="middle">直方图</text>
+<rect x="215" y="14" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="246" y="36" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">F2</text>
+<text x="246" y="57" font-size="11" fill="#475569" text-anchor="middle">矢量</text>
+<rect x="282" y="14" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="313" y="36" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">F3</text>
+<text x="313" y="57" font-size="11" fill="#475569" text-anchor="middle">波形</text>
+<rect x="14" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="45" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">1</text>
+<text x="45" y="120" font-size="11" fill="#475569" text-anchor="middle">隐左</text>
+<rect x="81" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="112" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">2</text>
+<text x="112" y="120" font-size="11" fill="#475569" text-anchor="middle">隐右</text>
+<rect x="148" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="179" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">3</text>
+<text x="179" y="120" font-size="11" fill="#475569" text-anchor="middle">隐HUD</text>
+<rect x="215" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="246" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">4</text>
+<text x="246" y="120" font-size="11" fill="#475569" text-anchor="middle">1:1</text>
+<rect x="282" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="313" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">5</text>
+<text x="313" y="120" font-size="11" fill="#475569" text-anchor="middle">50%</text>
+<rect x="349" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="380" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">6</text>
+<text x="380" y="120" font-size="11" fill="#475569" text-anchor="middle">100%</text>
+<rect x="416" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="447" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">7</text>
+<text x="447" y="120" font-size="11" fill="#475569" text-anchor="middle">200%</text>
+<rect x="483" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="514" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">8</text>
+<text x="514" y="120" font-size="11" fill="#475569" text-anchor="middle">400%</text>
+<rect x="550" y="77" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="581" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">9</text>
+<text x="581" y="120" font-size="11" fill="#475569" text-anchor="middle">800%</text>
+<rect x="617" y="77" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="648" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">0</text>
+<text x="648" y="120" font-size="11" fill="#475569" text-anchor="middle">减法</text>
+<rect x="684" y="77" width="62" height="58" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="715" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">-</text>
+<text x="715" y="120" font-size="11" fill="#475569" text-anchor="middle">步退</text>
+<rect x="751" y="77" width="62" height="58" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="782" y="99" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">+</text>
+<text x="782" y="120" font-size="11" fill="#475569" text-anchor="middle">步进</text>
+<rect x="48" y="140" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="78" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Q</text>
+<rect x="114" y="140" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="146" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">W</text>
+<rect x="182" y="140" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="212" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">E</text>
+<text x="212" y="183" font-size="11" fill="#475569" text-anchor="middle">居中</text>
+<rect x="248" y="140" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="280" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">R</text>
+<text x="280" y="183" font-size="11" fill="#475569" text-anchor="middle">复位</text>
+<rect x="316" y="140" width="62" height="58" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="346" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">T</text>
+<text x="346" y="183" font-size="11" fill="#475569" text-anchor="middle">纹理</text>
+<rect x="382" y="140" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="414" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Y</text>
+<text x="414" y="183" font-size="11" fill="#475569" text-anchor="middle">减法模式</text>
+<rect x="450" y="140" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="480" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">U</text>
+<text x="480" y="183" font-size="11" fill="#475569" text-anchor="middle">仅亮度</text>
+<rect x="516" y="140" width="62" height="58" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="548" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">I</text>
+<text x="548" y="183" font-size="11" fill="#475569" text-anchor="middle">缩放质量</text>
+<rect x="584" y="140" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="614" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">O</text>
+<rect x="650" y="140" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="682" y="162" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">P</text>
+<text x="682" y="183" font-size="11" fill="#475569" text-anchor="middle">取色</text>
+<rect x="68" y="203" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="99" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">A</text>
+<text x="99" y="246" font-size="11" fill="#475569" text-anchor="middle">前一帧</text>
+<rect x="135" y="203" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="166" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">S</text>
+<text x="166" y="246" font-size="11" fill="#475569" text-anchor="middle">交换</text>
+<rect x="202" y="203" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="233" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">D</text>
+<text x="233" y="246" font-size="11" fill="#475569" text-anchor="middle">后一帧</text>
+<rect x="269" y="203" width="62" height="58" rx="7" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.4"/>
+<text x="300" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">F</text>
+<text x="300" y="246" font-size="11" fill="#475569" text-anchor="middle">存图</text>
+<rect x="336" y="203" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="367" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">G</text>
+<rect x="403" y="203" width="62" height="58" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="434" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">H</text>
+<text x="434" y="246" font-size="11" fill="#475569" text-anchor="middle">帮助</text>
+<rect x="470" y="203" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="501" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">J</text>
+<text x="501" y="246" font-size="11" fill="#475569" text-anchor="middle">减速</text>
+<rect x="537" y="203" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="568" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">K</text>
+<rect x="604" y="203" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="635" y="225" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">L</text>
+<text x="635" y="246" font-size="11" fill="#475569" text-anchor="middle">加速</text>
+<rect x="94" y="266" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="125" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Z</text>
+<text x="125" y="309" font-size="11" fill="#475569" text-anchor="middle">放大左下</text>
+<rect x="161" y="266" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="192" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">X</text>
+<text x="192" y="309" font-size="11" fill="#475569" text-anchor="middle">帧率</text>
+<rect x="228" y="266" width="62" height="58" rx="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="259" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">C</text>
+<text x="259" y="309" font-size="11" fill="#475569" text-anchor="middle">放大右下</text>
+<rect x="295" y="266" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="326" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">V</text>
+<text x="326" y="309" font-size="11" fill="#475569" text-anchor="middle">信息</text>
+<rect x="362" y="266" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="393" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">B</text>
+<rect x="429" y="266" width="62" height="58" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.4"/>
+<text x="460" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">N</text>
+<rect x="496" y="266" width="62" height="58" rx="7" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="527" y="288" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">M</text>
+<text x="527" y="309" font-size="11" fill="#475569" text-anchor="middle">指标</text>
+<rect x="14" y="329" width="186" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="107" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Space</text>
+<text x="107" y="372" font-size="11" fill="#475569" text-anchor="middle">播放 / 暂停</text>
+<rect x="205" y="329" width="136" height="58" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="273" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Tab</text>
+<text x="273" y="372" font-size="11" fill="#475569" text-anchor="middle">切换右视频</text>
+<rect x="346" y="329" width="112" height="58" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="402" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">Ctrl+0</text>
+<text x="402" y="372" font-size="11" fill="#475569" text-anchor="middle">清除偏移</text>
+<rect x="463" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="494" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">←</text>
+<text x="494" y="372" font-size="11" fill="#475569" text-anchor="middle">-1s</text>
+<rect x="530" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="561" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">↓</text>
+<text x="561" y="372" font-size="11" fill="#475569" text-anchor="middle">-15s</text>
+<rect x="597" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="628" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">↑</text>
+<text x="628" y="372" font-size="11" fill="#475569" text-anchor="middle">+15s</text>
+<rect x="664" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="695" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">→</text>
+<text x="695" y="372" font-size="11" fill="#475569" text-anchor="middle">+1s</text>
+<rect x="731" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="762" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">PgUp</text>
+<text x="762" y="372" font-size="11" fill="#475569" text-anchor="middle">+600s</text>
+<rect x="798" y="329" width="62" height="58" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="829" y="351" font-size="16" font-weight="600" fill="#0f172a" text-anchor="middle">PgDn</text>
+<text x="829" y="372" font-size="11" fill="#475569" text-anchor="middle">-600s</text>
+<rect x="14" y="400" width="14" height="14" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+<text x="34" y="412" font-size="12" fill="#334155">步进对齐(本 fork)</text>
+<rect x="194" y="400" width="14" height="14" rx="3" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+<text x="214" y="412" font-size="12" fill="#334155">播放定位</text>
+<rect x="270" y="400" width="14" height="14" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.2"/>
+<text x="290" y="412" font-size="12" fill="#334155">视图缩放</text>
+<rect x="346" y="400" width="14" height="14" rx="3" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.2"/>
+<text x="366" y="412" font-size="12" fill="#334155">分析差分</text>
+<rect x="422" y="400" width="14" height="14" rx="3" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.2"/>
+<text x="442" y="412" font-size="12" fill="#334155">裁剪保存</text>
+</svg>
