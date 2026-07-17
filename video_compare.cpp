@@ -884,8 +884,7 @@ void VideoCompare::compare() {
 
     int frame_offset = 0;
 
-    std::map<size_t, int64_t> per_right_time_shifts;      // right_index -> accumulated frame count offset (reported to the user)
-    std::map<size_t, int64_t> per_right_step_shifts_av;   // right_index -> the same offset in AV time, frozen when stepped
+    std::map<size_t, int64_t> per_right_step_shifts_av;  // right_index -> accumulated step offset in AV time, frozen when stepped
 
     // Record a step of the given right video, freezing it into AV time right away.
     // Converting on use instead would make the shift a function of the live
@@ -896,8 +895,15 @@ void VideoCompare::compare() {
     // partial-seek path, which must pick a target before it knows where it lands,
     // has to fall back on the delta_pts_ average.
     auto apply_right_step_offset = [&](const size_t right_index, const int64_t frames, const int64_t frame_duration) {
-      per_right_time_shifts[right_index] += frames;
       per_right_step_shifts_av[right_index] += frames * frame_duration;
+    };
+
+    // The offset as a frame count, for reporting only.  Derived on demand rather
+    // than counted alongside the AV time: the two drift apart wherever a frame
+    // duration has to stand in for the real distance between frames, and the count
+    // would then keep insisting the sides are apart when they are level.
+    auto right_step_offset_in_frames = [&](const size_t right_index, const int64_t frame_duration) -> int64_t {
+      return frame_duration > 0 ? std::llround(static_cast<double>(per_right_step_shifts_av[right_index]) / frame_duration) : 0;
     };
 
     // Compute the effective PTS time shift for a given right video index.
@@ -1194,7 +1200,7 @@ void VideoCompare::compare() {
           frame_offset = 0;
 
           // Notify user
-          const int64_t total_offset = per_right_time_shifts[active_right_index_];
+          const int64_t total_offset = right_step_offset_in_frames(active_right_index_, right_delta);
           if (frames_stepped < step_right_frames) {
             notify_step(string_sprintf("Right #%zu: %s%lld frames (reached end)",
               active_right_index_ + 1,
@@ -1226,7 +1232,6 @@ void VideoCompare::compare() {
         // taken back exactly.  Subtracting the requested amount would not do:
         // the clamp below may commit less than was asked for.
         const int64_t old_step_shift_av = per_right_step_shifts_av[active_right_index_];
-        const int64_t old_step_frames = per_right_time_shifts[active_right_index_];
 
         bool clamped_at_start = false;
 
@@ -1268,7 +1273,6 @@ void VideoCompare::compare() {
 
             if (per_right_step_shifts_av[active_right_index_] < reachable_shift) {
               per_right_step_shifts_av[active_right_index_] = reachable_shift;
-              per_right_time_shifts[active_right_index_] = std::llround(static_cast<double>(reachable_shift) / right_delta);
               clamped_at_start = true;
             }
           }
@@ -1284,7 +1288,6 @@ void VideoCompare::compare() {
         if (new_front_pts == old_front_pts) {
           // Didn't move — put the offset back exactly as it was.
           per_right_step_shifts_av[active_right_index_] = old_step_shift_av;
-          per_right_time_shifts[active_right_index_] = old_step_frames;
 
           // Only report "reached start" when the current frame is genuinely the
           // first decoded frame of the video.  When the drain in
@@ -1296,7 +1299,7 @@ void VideoCompare::compare() {
           }
         } else {
           // Notify user with current offset
-          const int64_t total_offset = per_right_time_shifts[active_right_index_];
+          const int64_t total_offset = right_step_offset_in_frames(active_right_index_, right_delta);
           notify_step(string_sprintf("Right #%zu: %s%lld frames%s",
             active_right_index_ + 1,
             total_offset > 0 ? "+" : "",
@@ -1309,8 +1312,10 @@ void VideoCompare::compare() {
 
       // Handle Ctrl+0 reset of current right video's offset
       if (display_->get_reset_right_offset()) {
-        if (per_right_time_shifts[active_right_index_] != 0) {
-          per_right_time_shifts[active_right_index_] = 0;
+        // The AV-time offset decides, not the frame count beside it: the count is
+        // derived through a frame duration wherever a step could not measure the
+        // real distance, so it can read zero while the side is still shifted.
+        if (per_right_step_shifts_av[active_right_index_] != 0) {
           per_right_step_shifts_av[active_right_index_] = 0;
 
           // Trigger a partial seek to re-sync the right video with left's position
@@ -1330,13 +1335,15 @@ void VideoCompare::compare() {
       {
         const bool now_playing = display_->get_play();
         if (now_playing && !was_playing) {
-          for (auto& shift_pair : per_right_time_shifts) {
+          for (auto& shift_pair : per_right_step_shifts_av) {
             const Side side = Side::Right(shift_pair.first);
             SideState& rs = side_states.at(side);
 
             // Steps that cancel out still leave the pipeline ahead of the display
             // by the number of frames a backward step set aside, so a zero offset
-            // on its own does not mean the side is aligned.
+            // on its own does not mean the side is aligned.  Test the AV-time
+            // offset rather than the frame count, which is an estimate wherever a
+            // step could not measure the real distance between two frames.
             if (shift_pair.second == 0 && rs.stepped_back_frames_.empty()) {
               continue;
             }
