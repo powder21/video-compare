@@ -34,7 +34,12 @@ make -j4
 make install        # 装到 /opt/homebrew/bin 或 /usr/local/bin
 ```
 
-**macOS 上编译后请确认这一步**,它花过我们一小时:
+<details>
+<summary><b>编译成功但运行异常(崩溃 / 窗口打不开)—— 可能装了两个 SDL2</b></summary>
+
+Homebrew 的 `sdl2` 现在是 `sdl2-compat`(SDL2-on-SDL3 垫片)的别名。若机器上还留着迁移前的旧
+`sdl2`,主程序和 `libSDL2_ttf` 可能各链一个,**同一进程里载入两个 SDL2 实现**。
+`--version` 不碰 SDL,照跑不误,所以这个状态不会自己暴露。
 
 ```sh
 P='/opt/homebrew/opt/sdl2[^/]*/lib/libSDL2-2\.0\.0\.dylib'
@@ -42,34 +47,27 @@ otool -L video-compare | grep -oE "$P"
 otool -L "$(brew --prefix sdl2_ttf)/lib/libSDL2_ttf-2.0.0.dylib" | grep -oE "$P"
 ```
 
-**两条输出必须相同。** Homebrew 的 `sdl2` 现在是 `sdl2-compat`(SDL2-on-SDL3 垫片)的别名,
-若机器上还留着迁移前的旧 `sdl2`,主程序和 `libSDL2_ttf` 可能各链一个 ——
-**一个进程里载入两个 SDL2 实现**,`--version` 照跑,开窗行为不可预期。不一致时:
+两条输出**不同**就是中招了。修复:
 
 ```sh
 brew unlink sdl2-compat && brew link --overwrite sdl2 && make -B && make install
 ```
 
-### Windows — 下载构建产物
+全新机器只会装到 `sdl2-compat`,两边一致,不受影响。
 
-从本 fork 的 [Actions](https://github.com/powder21/video-compare/actions) 页面下载
-`video-compare-windows`,解压后 `.exe` 和全部 DLL 在同一目录,直接运行。
+</details>
 
-也可用 MSYS2 的 **MINGW64** 终端自行编译:先跑 `./download_and_extract_windows_deps.sh ffmpeg`
-(以及 `sdl2`、`sdl2_ttf`)拉依赖,再 `mingw32-make`。
+### 构建产物
 
-### macOS 构建产物(有限制)
+[Actions](https://github.com/powder21/video-compare/actions) 页面每次提交都会产出三个平台的构建。
 
-[Actions](https://github.com/powder21/video-compare/actions) 页面的 `video-compare-macos`
-自带全部依赖,解压后需先清除下载隔离:
+| 平台 | 可用性 |
+|---|---|
+| **Windows** | **✓ 解压即用** —— 自带全部 DLL |
+| **macOS** | **△ 有限制** —— 自带依赖,但**仅 arm64**、且**只能在 macOS 26+ 运行**(产物不向下兼容 CI runner 的系统版本)。用前需 `xattr -dr com.apple.quarantine .` 清除下载隔离 |
+| **Linux** | **✗ 不建议** —— 裸二进制,链接 CI runner 的系统库,换台机器多半跑不起来 |
 
-```sh
-xattr -dr com.apple.quarantine .
-./video-compare -d -u a.mp4 b.mp4
-```
-
-**限制**:仅 **arm64**,且**只能在与 CI runner 同版本或更新的 macOS 上运行**
-(产物不向下兼容,当前 runner 是 macOS 26)。旧系统或 Intel 机器请从源码编译。
+Intel Mac、旧版 macOS、以及 Linux,请从源码编译。
 
 ---
 
