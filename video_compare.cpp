@@ -887,14 +887,17 @@ void VideoCompare::compare() {
     std::map<size_t, int64_t> per_right_time_shifts;      // right_index -> accumulated frame count offset (reported to the user)
     std::map<size_t, int64_t> per_right_step_shifts_av;   // right_index -> the same offset in AV time, frozen when stepped
 
-    // Record a step of the given right video, freezing the frame count into AV
-    // time right away.  Converting on use instead would make the shift a function
-    // of the live delta_pts_, and since the shift is subtracted from the PTS that
-    // delta_pts_ is itself measured from, that closes a positive feedback loop
-    // with a gain of (accumulated frames / frame_duration_deque_ size).
-    auto apply_right_step_offset = [&](const size_t right_index, const int64_t frames, const int64_t right_delta_pts) {
+    // Record a step of the given right video, freezing it into AV time right away.
+    // Converting on use instead would make the shift a function of the live
+    // delta_pts_, and since the shift is subtracted from the PTS that delta_pts_ is
+    // itself measured from, that closes a positive feedback loop with a gain of
+    // (accumulated frames / frame_duration_deque_ size).  Callers that have both
+    // frames on hand pass their exact PTS distance as frame_duration; only the
+    // partial-seek path, which must pick a target before it knows where it lands,
+    // has to fall back on the delta_pts_ average.
+    auto apply_right_step_offset = [&](const size_t right_index, const int64_t frames, const int64_t frame_duration) {
       per_right_time_shifts[right_index] += frames;
-      per_right_step_shifts_av[right_index] += frames * right_delta_pts;
+      per_right_step_shifts_av[right_index] += frames * frame_duration;
     };
 
     // Compute the effective PTS time shift for a given right video index.
@@ -1156,8 +1159,12 @@ void VideoCompare::compare() {
           if (stepped_frame != nullptr || converted_frame_queues_[active_right]->pop(stepped_frame)) {
             right_ptr->decoded_picture_number_++;
 
-            // Accumulate per-video offset
-            apply_right_step_offset(active_right_index_, 1, right_delta);
+            // Move the offset by the distance between the frame being replaced and
+            // the one replacing it, which is exact, rather than by delta_pts_: that
+            // is a rolling average a single irregular interval can skew, and since
+            // the offset is frozen when the step is taken it would keep the error.
+            const int64_t replaced_pts = right_ptr->frames_.empty() ? stepped_frame->pts : right_ptr->frames_[0]->pts;
+            apply_right_step_offset(active_right_index_, 1, stepped_frame->pts - replaced_pts);
             frames_stepped++;
 
             // Store every stepped frame, not just the one the loop ends on: the
@@ -1230,11 +1237,15 @@ void VideoCompare::compare() {
           // them back: the pipeline is not rewound here, so its head is N frames
           // beyond the one now displayed.
           for (int i = 0; i < steps_back; i++) {
+            const int64_t leaving_pts = right_ptr->frames_[0]->pts;
+
             right_ptr->stepped_back_frames_.push_front(std::move(right_ptr->frames_.front()));
             right_ptr->frames_.pop_front();
-          }
 
-          apply_right_step_offset(active_right_index_, step_right_frames, right_delta);  // negative
+            // As on the way forward, move the offset by the exact distance between
+            // the frames rather than by the delta_pts_ average.
+            apply_right_step_offset(active_right_index_, -1, leaving_pts - right_ptr->frames_[0]->pts);
+          }
 
           // Recompute PTS and effective shift from the buffer frame now at front
           const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
