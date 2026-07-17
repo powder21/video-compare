@@ -12,28 +12,64 @@
 
 ## 安装
 
-**macOS** — `brew install video-compare`
+> **包管理器装的是上游 pixop 版,不含本 fork 的修复。**
+> `brew install video-compare` / `yay -S video-compare` 都能跑,但**没有** v1.0~v1.2 的任何改动 ——
+> 而且不会有任何提示。要本 fork 的版本,只能用下面的方式。
 
-**Arch Linux** — `yay -S video-compare`(AUR)
-
-**Windows** — 从 [Actions](https://github.com/powder21/video-compare/actions) 页面下载构建产物,
-解压后 `.exe` 和所有 DLL 在同一目录,直接运行。上游的预编译版见
-[pixop releases](https://github.com/pixop/video-compare/releases)。
-
-**从源码编译** — 需要 FFmpeg、SDL2(≥2.0.10)和 SDL2_ttf 的开发库。
+### macOS / Linux — 从源码编译
 
 ```sh
+# macOS
+brew install ffmpeg sdl2 sdl2_ttf
 # Debian/Ubuntu
 apt install build-essential libavformat-dev libavcodec-dev libavfilter-dev \
             libavutil-dev libswscale-dev libswresample-dev libsdl2-dev libsdl2-ttf-dev
 # Fedora
 dnf install make gcc-c++ ffmpeg-devel SDL2-devel SDL2_ttf-devel
 
-make && make install
+git clone https://github.com/powder21/video-compare.git
+cd video-compare
+git checkout v1.2
+make -j4
+make install        # 装到 /opt/homebrew/bin 或 /usr/local/bin
 ```
 
-Windows 用 MSYS2 的 **MINGW64** 终端:先跑 `./download_and_extract_windows_deps.sh ffmpeg`
+**macOS 上编译后请确认这一步**,它花过我们一小时:
+
+```sh
+P='/opt/homebrew/opt/sdl2[^/]*/lib/libSDL2-2\.0\.0\.dylib'
+otool -L video-compare | grep -oE "$P"
+otool -L "$(brew --prefix sdl2_ttf)/lib/libSDL2_ttf-2.0.0.dylib" | grep -oE "$P"
+```
+
+**两条输出必须相同。** Homebrew 的 `sdl2` 现在是 `sdl2-compat`(SDL2-on-SDL3 垫片)的别名,
+若机器上还留着迁移前的旧 `sdl2`,主程序和 `libSDL2_ttf` 可能各链一个 ——
+**一个进程里载入两个 SDL2 实现**,`--version` 照跑,开窗行为不可预期。不一致时:
+
+```sh
+brew unlink sdl2-compat && brew link --overwrite sdl2 && make -B && make install
+```
+
+### Windows — 下载构建产物
+
+从本 fork 的 [Actions](https://github.com/powder21/video-compare/actions) 页面下载
+`video-compare-windows`,解压后 `.exe` 和全部 DLL 在同一目录,直接运行。
+
+也可用 MSYS2 的 **MINGW64** 终端自行编译:先跑 `./download_and_extract_windows_deps.sh ffmpeg`
 (以及 `sdl2`、`sdl2_ttf`)拉依赖,再 `mingw32-make`。
+
+### macOS 构建产物(有限制)
+
+[Actions](https://github.com/powder21/video-compare/actions) 页面的 `video-compare-macos`
+自带全部依赖,解压后需先清除下载隔离:
+
+```sh
+xattr -dr com.apple.quarantine .
+./video-compare -d -u a.mp4 b.mp4
+```
+
+**限制**:仅 **arm64**,且**只能在与 CI runner 同版本或更新的 macOS 上运行**
+(产物不向下兼容,当前 runner 是 macOS 26)。旧系统或 Intel 机器请从源码编译。
 
 ---
 
