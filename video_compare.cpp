@@ -1609,10 +1609,10 @@ void VideoCompare::compare() {
       skip_update = skip_update || ((timer_->us_until_target() - refresh_time_deque.average()) > 0 && !paused_forward_step);
       const bool fetch_next_frame = display_->get_play() || (forward_navigate_frames > 0);
 
-      // use the delta between current and previous PTS as the tolerance which determines whether we have to adjust
+#ifdef _DEBUG
+      // the tolerance the active pair is being adjusted against
       const int64_t min_delta = compute_min_delta(left.delta_pts_, right_ptr->delta_pts_);
 
-#ifdef _DEBUG
       const std::string current_state = string_sprintf("left_pts=%5d, left_is_behind=%d, right_pts=%5d, right_is_behind=%d, min_delta=%5d, effective_right_time_shift=%5d", left.pts_ / 1000, is_behind(left.pts_, right_ptr->pts_, min_delta),
                                                        (right_ptr->pts_ + right_ptr->effective_time_shift_) / 1000, is_behind(right_ptr->pts_, left.pts_, min_delta), min_delta / 1000, right_ptr->effective_time_shift_ / 1000);
 
@@ -1641,8 +1641,8 @@ void VideoCompare::compare() {
 
         return result;
       };
-      auto sync_frame_queue = [&](SideState& side_state, const SideState& other_side) {
-        if (is_behind(side_state.pts_, other_side.pts_, min_delta)) {
+      auto sync_frame_queue = [&](SideState& side_state, const SideState& other_side, const int64_t pair_min_delta) {
+        if (is_behind(side_state.pts_, other_side.pts_, pair_min_delta)) {
           adjusting = true;
 
           pop_frame(side_state);
@@ -1657,8 +1657,15 @@ void VideoCompare::compare() {
         for (auto& pair : side_states) {
           if (pair.first.is_right()) {
             SideState& right_state = pair.second;
-            sync_frame_queue(left, right_state);
-            sync_frame_queue(right_state, left);
+
+            // The tolerance belongs to the pair being compared, so derive it from
+            // this right video's own frame duration.  Borrowing the active video's
+            // would let a side with a shorter frame duration drift by the ratio
+            // between the two before the catch-up fires.
+            const int64_t pair_min_delta = compute_min_delta(left.delta_pts_, right_state.delta_pts_);
+
+            sync_frame_queue(left, right_state, pair_min_delta);
+            sync_frame_queue(right_state, left, pair_min_delta);
           }
         }
       }
