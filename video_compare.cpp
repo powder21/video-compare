@@ -876,11 +876,22 @@ void VideoCompare::compare() {
 
     int frame_offset = 0;
 
-    std::map<size_t, int64_t> per_right_time_shifts;  // right_index -> accumulated frame count offset
+    std::map<size_t, int64_t> per_right_time_shifts;      // right_index -> accumulated frame count offset (reported to the user)
+    std::map<size_t, int64_t> per_right_step_shifts_av;   // right_index -> the same offset in AV time, frozen when stepped
+
+    // Record a step of the given right video, freezing the frame count into AV
+    // time right away.  Converting on use instead would make the shift a function
+    // of the live delta_pts_, and since the shift is subtracted from the PTS that
+    // delta_pts_ is itself measured from, that closes a positive feedback loop
+    // with a gain of (accumulated frames / frame_duration_deque_ size).
+    auto apply_right_step_offset = [&](const size_t right_index, const int64_t frames, const int64_t right_delta_pts) {
+      per_right_time_shifts[right_index] += frames;
+      per_right_step_shifts_av[right_index] += frames * right_delta_pts;
+    };
 
     // Compute the effective PTS time shift for a given right video index.
-    auto compute_static_right_time_shift = [&](const size_t right_index, const int64_t right_delta_pts) -> int64_t {
-      return time_shift_offset_av_time_ + per_right_time_shifts[right_index] * right_delta_pts;
+    auto compute_static_right_time_shift = [&](const size_t right_index) -> int64_t {
+      return time_shift_offset_av_time_ + per_right_step_shifts_av[right_index];
     };
 
     // Partial seek: stop/drain/flush/reinit/seek/restart a single right video's pipeline,
@@ -1120,7 +1131,7 @@ void VideoCompare::compare() {
           // preceding keyframe, and partial_seek_right_video clears the mode, so the
           // cost is paid at most once and only if stepping runs past the buffer.
           if (single_decoder_mode_ && !converted_frame_queues_[active_right]->try_pop(stepped_frame)) {
-            const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+            const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
             const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
             partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
           }
@@ -1131,7 +1142,7 @@ void VideoCompare::compare() {
             right_ptr->decoded_picture_number_++;
 
             // Accumulate per-video offset
-            per_right_time_shifts[active_right_index_]++;
+            apply_right_step_offset(active_right_index_, 1, right_delta);
             frames_stepped++;
           } else {
             // Queue empty — cannot step further forward
@@ -1141,7 +1152,7 @@ void VideoCompare::compare() {
 
         if (frames_stepped > 0 && right_ptr->frame_ != nullptr) {
           // Compute effective time shift for the active right video
-          const int64_t static_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
           right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
 
           // Update PTS only — do NOT update delta_pts_ here because the time-shifted
@@ -1194,19 +1205,19 @@ void VideoCompare::compare() {
             right_ptr->frames_.pop_front();
           }
 
-          per_right_time_shifts[active_right_index_] += step_right_frames;  // negative
+          apply_right_step_offset(active_right_index_, step_right_frames, right_delta);  // negative
 
           // Recompute PTS and effective shift from the buffer frame now at front
-          const int64_t static_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
           right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frames_[0]->pts, true);
           right_ptr->pts_ = right_ptr->frames_[0]->pts - right_ptr->effective_time_shift_;
 
           frame_offset = 0;
         } else {
           // Slow path: target is beyond the buffer — partial seek required.
-          per_right_time_shifts[active_right_index_] += step_right_frames;  // negative
+          apply_right_step_offset(active_right_index_, step_right_frames, right_delta);  // negative
 
-          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
           const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
           partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
         }
@@ -1215,8 +1226,9 @@ void VideoCompare::compare() {
         const int64_t new_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
 
         if (new_front_pts == old_front_pts) {
-          // Didn't move — undo the offset change
-          per_right_time_shifts[active_right_index_] -= step_right_frames;  // undo (subtract negative = add)
+          // Didn't move — undo the offset change.  right_delta is unchanged since
+          // the step above, so the AV-time undo is exact.
+          apply_right_step_offset(active_right_index_, -step_right_frames, right_delta);  // undo
 
           // Only report "reached start" when the current frame is genuinely the
           // first decoded frame of the video.  When the drain in
@@ -1242,9 +1254,10 @@ void VideoCompare::compare() {
       if (display_->get_reset_right_offset()) {
         if (per_right_time_shifts[active_right_index_] != 0) {
           per_right_time_shifts[active_right_index_] = 0;
+          per_right_step_shifts_av[active_right_index_] = 0;
 
           // Trigger a partial seek to re-sync the right video with left's position
-          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_, right_delta);
+          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
           const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
           partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
 
@@ -1264,7 +1277,7 @@ void VideoCompare::compare() {
             if (shift_pair.second != 0) {
               const Side side = Side::Right(shift_pair.first);
               SideState& rs = side_states.at(side);
-              const int64_t eff = compute_static_right_time_shift(shift_pair.first, normalized_delta(rs.delta_pts_));
+              const int64_t eff = compute_static_right_time_shift(shift_pair.first);
               const float target = left.pts_ * AV_TIME_TO_SEC + rs.start_time_ + eff * AV_TIME_TO_SEC;
               partial_seek_right_video(side, rs, eff, target);
             }
@@ -1312,7 +1325,7 @@ void VideoCompare::compare() {
         empty_frame_queues();
 
         // update decoder mode
-        update_decoder_mode(compute_static_right_time_shift(active_right_index_, right_delta));
+        update_decoder_mode(compute_static_right_time_shift(active_right_index_));
 
         // consume filter changes
         consume_filter_changes();
@@ -1395,7 +1408,7 @@ void VideoCompare::compare() {
             next_right_position = std::max(next_right_position, min_right_position);
 
             // Add the dynamic time shift and the delta PTS to the next right position
-            const int64_t per_video_static_shift = compute_static_right_time_shift(side.right_index(), normalized_delta(right_state.delta_pts_));
+            const int64_t per_video_static_shift = compute_static_right_time_shift(side.right_index());
             next_right_position += per_video_static_shift * AV_TIME_TO_SEC;
             next_right_position += static_cast<float>(calculate_dynamic_time_shift(time_shift_.multiplier, (next_right_position - right_state.start_time_) / AV_TIME_TO_SEC, false)) * AV_TIME_TO_SEC;
 
@@ -1485,7 +1498,7 @@ void VideoCompare::compare() {
           if (side.is_right()) {
             SideState& right_state = pair.second;
 
-            int64_t per_video_shift = compute_static_right_time_shift(side.right_index(), normalized_delta(right_state.delta_pts_));
+            int64_t per_video_shift = compute_static_right_time_shift(side.right_index());
 
             // round away from zero to nearest 2 ms
             if (per_video_shift > 0) {
@@ -1578,7 +1591,7 @@ void VideoCompare::compare() {
             for (auto& pair : side_states) {
               if (pair.first.is_right()) {
                 auto& side_state = pair.second;
-                side_state.effective_time_shift_ = compute_static_right_time_shift(pair.first.right_index(), normalized_delta(side_state.delta_pts_)) + calculate_dynamic_time_shift(time_shift_.multiplier, side_state.frame_->pts, true);
+                side_state.effective_time_shift_ = compute_static_right_time_shift(pair.first.right_index()) + calculate_dynamic_time_shift(time_shift_.multiplier, side_state.frame_->pts, true);
               }
             }
 
