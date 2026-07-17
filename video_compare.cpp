@@ -1215,6 +1215,14 @@ void VideoCompare::compare() {
         // Remember current front frame PTS to detect "didn't actually move"
         const int64_t old_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
 
+        // Snapshot the offset so a step that turns out to be impossible can be
+        // taken back exactly.  Subtracting the requested amount would not do:
+        // the clamp below may commit less than was asked for.
+        const int64_t old_step_shift_av = per_right_step_shifts_av[active_right_index_];
+        const int64_t old_step_frames = per_right_time_shifts[active_right_index_];
+
+        bool clamped_at_start = false;
+
         if (steps_back <= buffered_frames) {
           // Fast path: target frame is already in the buffer — no seek needed.
           // Move the newest N frames aside; the target becomes frames_[0].  They
@@ -1238,6 +1246,22 @@ void VideoCompare::compare() {
           // Slow path: target is beyond the buffer — partial seek required.
           apply_right_step_offset(active_right_index_, step_right_frames, right_delta);  // negative
 
+          // A step reaching past the video's first frame cannot be honoured: the
+          // demuxer clamps there.  Reduce the offset to what is reachable, since
+          // the seek below derives pts_ from it and would otherwise place this
+          // side ahead of the frame it actually shows, leaving the sync pass to
+          // drag the LEFT video forward to a position that was never requested.
+          // The resulting target matches the clamp the full seek path applies.
+          if (right_ptr->first_pts_ > INT64_MIN) {
+            const int64_t reachable_shift = right_ptr->first_pts_ - left.pts_ - time_shift_offset_av_time_;
+
+            if (per_right_step_shifts_av[active_right_index_] < reachable_shift) {
+              per_right_step_shifts_av[active_right_index_] = reachable_shift;
+              per_right_time_shifts[active_right_index_] = std::llround(static_cast<double>(reachable_shift) / right_delta);
+              clamped_at_start = true;
+            }
+          }
+
           const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
           const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
           partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
@@ -1247,9 +1271,9 @@ void VideoCompare::compare() {
         const int64_t new_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
 
         if (new_front_pts == old_front_pts) {
-          // Didn't move — undo the offset change.  right_delta is unchanged since
-          // the step above, so the AV-time undo is exact.
-          apply_right_step_offset(active_right_index_, -step_right_frames, right_delta);  // undo
+          // Didn't move — put the offset back exactly as it was.
+          per_right_step_shifts_av[active_right_index_] = old_step_shift_av;
+          per_right_time_shifts[active_right_index_] = old_step_frames;
 
           // Only report "reached start" when the current frame is genuinely the
           // first decoded frame of the video.  When the drain in
@@ -1262,10 +1286,11 @@ void VideoCompare::compare() {
         } else {
           // Notify user with current offset
           const int64_t total_offset = per_right_time_shifts[active_right_index_];
-          notify_step(string_sprintf("Right #%zu: %s%lld frames",
+          notify_step(string_sprintf("Right #%zu: %s%lld frames%s",
             active_right_index_ + 1,
             total_offset > 0 ? "+" : "",
-            static_cast<long long>(total_offset)));
+            static_cast<long long>(total_offset),
+            clamped_at_start ? " (reached start)" : ""));
         }
 
         skip_update = true;
