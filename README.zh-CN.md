@@ -56,7 +56,7 @@ video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
 
 ![键盘快捷键](keyboard-zh.svg)
 
-> 图中只画了单键功能。带修饰键的(`Shift+`、`Ctrl+`、`Alt+`)见下方表格。
+> 图中只画**单键**功能,灰色键无单键功能。带修饰键的(`Shift+`、`Ctrl+`、`Alt+`)见下方表格。
 
 ### 播放与定位
 
