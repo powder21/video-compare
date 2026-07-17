@@ -333,7 +333,7 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
 
   left_video_metadata_ = collect_metadata(LEFT);
 
-  update_decoder_mode(time_shift_offset_av_time_);
+  update_decoder_mode(std::llabs(time_shift_offset_av_time_));
 
   const Side active_right = Side::Right(active_right_index_);
   const auto right_it = right_video_info_.find(active_right);
@@ -650,8 +650,12 @@ void VideoCompare::quit_all_queues() {
   }
 }
 
-void VideoCompare::update_decoder_mode(const int right_time_shift) {
-  single_decoder_mode_ = same_decoded_video_both_sides_ && (av_q2d(time_shift_.multiplier) == 1.0) && (abs(right_time_shift) < NEAR_ZERO_TIME_SHIFT_THRESHOLD);
+// Single decoder mode parks the demux and decode threads of EVERY right side and
+// feeds them all from the left decoder's fan-out, so it may only be entered while
+// no right video is shifted away from the left: pass the largest shift any of them
+// carries, as an absolute AV-time value.
+void VideoCompare::update_decoder_mode(const int64_t max_abs_right_time_shift) {
+  single_decoder_mode_ = same_decoded_video_both_sides_ && (av_q2d(time_shift_.multiplier) == 1.0) && (max_abs_right_time_shift < NEAR_ZERO_TIME_SHIFT_THRESHOLD);
 }
 
 void VideoCompare::note_decoded_frame(const Side& side, const int64_t pts) {
@@ -1394,8 +1398,18 @@ void VideoCompare::compare() {
         // empty the frame queues one last time
         empty_frame_queues();
 
-        // update decoder mode
-        update_decoder_mode(compute_static_right_time_shift(active_right_index_));
+        // update decoder mode.  Every right side's pipeline hangs on this, so the
+        // active one's offset alone cannot decide it: a right video left shifted by
+        // an earlier step would be parked while still expecting its own frames.
+        int64_t max_abs_right_time_shift = 0;
+
+        for (auto& pair : side_states) {
+          if (pair.first.is_right()) {
+            max_abs_right_time_shift = std::max<int64_t>(max_abs_right_time_shift, std::llabs(compute_static_right_time_shift(pair.first.right_index())));
+          }
+        }
+
+        update_decoder_mode(max_abs_right_time_shift);
 
         // consume filter changes
         consume_filter_changes();

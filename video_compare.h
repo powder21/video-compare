@@ -143,7 +143,7 @@ class VideoCompare {
   bool keep_running() const;
   void quit_all_queues();
 
-  void update_decoder_mode(const int right_time_shift);
+  void update_decoder_mode(const int64_t max_abs_right_time_shift);
 
   void note_decoded_frame(const Side& side, const int64_t pts);
 
