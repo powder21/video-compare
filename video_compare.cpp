@@ -839,6 +839,14 @@ struct SideState {
   const float start_time_;
 
   std::deque<AVFrameUniquePtr> frames_;
+
+  // Frames taken off the front of frames_ by backward steps, oldest first.  A
+  // backward step rewinds the browse buffer but not the decode pipeline, so the
+  // pipeline stays ahead of the display by exactly this many frames and its head
+  // is not the frame that follows the displayed one.  Stepping forward again
+  // hands these back instead of pulling from the pipeline.
+  std::deque<AVFrameUniquePtr> stepped_back_frames_;
+
   AVFrameUniquePtr frame_{nullptr, avframe_deleter};
 
   int64_t first_pts_ = INT64_MIN;
@@ -964,8 +972,11 @@ void VideoCompare::compare() {
         right_state.decoded_picture_number_ = 1;
         right_state.frame_ = nullptr;
 
-        // Replace frame buffer with collected drain frames
+        // Replace frame buffer with collected drain frames.  The pipeline is now
+        // aligned with the target, so any frames set aside by earlier backward
+        // steps describe a position that no longer exists.
         right_state.frames_ = std::move(drain_frames);
+        right_state.stepped_back_frames_.clear();
 
         // Reset frame offset so display shows the new frame
         frame_offset = 0;
@@ -1122,49 +1133,55 @@ void VideoCompare::compare() {
         for (int i = 0; i < step_right_frames; i++) {
           AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
 
-          // In single decoder mode this video has no pipeline of its own: its frames
-          // arrive through the left decoder's fan-out, which stalls while paused once
-          // the left pipeline fills up.  So once the frames already in flight have
-          // been consumed the queue never refills and the pop below would block
-          // forever; give the video its own pipeline instead.  Seeking is deferred
-          // to here rather than done up front because it re-decodes from the
-          // preceding keyframe, and partial_seek_right_video clears the mode, so the
-          // cost is paid at most once and only if stepping runs past the buffer.
-          if (single_decoder_mode_ && !converted_frame_queues_[active_right]->try_pop(stepped_frame)) {
+          if (!right_ptr->stepped_back_frames_.empty()) {
+            // Undo an earlier backward step from its set-aside frames.  The pipeline
+            // still sits where that step left it, so its head is not the frame that
+            // follows the displayed one and must not be used here.
+            stepped_frame = std::move(right_ptr->stepped_back_frames_.front());
+            right_ptr->stepped_back_frames_.pop_front();
+          } else if (single_decoder_mode_ && !converted_frame_queues_[active_right]->try_pop(stepped_frame)) {
+            // In single decoder mode this video has no pipeline of its own: its frames
+            // arrive through the left decoder's fan-out, which stalls while paused once
+            // the left pipeline fills up.  So once the frames already in flight have
+            // been consumed the queue never refills and the pop below would block
+            // forever; give the video its own pipeline instead.  Seeking is deferred
+            // to here rather than done up front because it re-decodes from the
+            // preceding keyframe, and partial_seek_right_video clears the mode, so the
+            // cost is paid at most once and only if stepping runs past the buffer.
             const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
             const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
             partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
           }
 
           if (stepped_frame != nullptr || converted_frame_queues_[active_right]->pop(stepped_frame)) {
-            // Update the right video's state with the new frame
-            right_ptr->frame_ = std::move(stepped_frame);
             right_ptr->decoded_picture_number_++;
 
             // Accumulate per-video offset
             apply_right_step_offset(active_right_index_, 1, right_delta);
             frames_stepped++;
+
+            // Store every stepped frame, not just the one the loop ends on: the
+            // browse buffer and the backward fast path both take adjacent entries
+            // to be exactly one frame apart.
+            if (right_ptr->frames_.size() >= frame_buffer_size_) {
+              right_ptr->frames_.pop_back();
+            }
+            right_ptr->frames_.push_front(std::move(stepped_frame));
           } else {
             // Queue empty — cannot step further forward
             break;
           }
         }
 
-        if (frames_stepped > 0 && right_ptr->frame_ != nullptr) {
+        if (frames_stepped > 0 && !right_ptr->frames_.empty()) {
           // Compute effective time shift for the active right video
           const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
-          right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frame_->pts, true);
+          right_ptr->effective_time_shift_ = static_shift + calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frames_[0]->pts, true);
 
           // Update PTS only — do NOT update delta_pts_ here because the time-shifted
           // PTS difference (≈0 for CFR) is not the actual frame duration.  Corrupting
           // delta_pts_ shrinks the sync tolerance and causes both sides to pop.
-          right_ptr->pts_ = right_ptr->frame_->pts - right_ptr->effective_time_shift_;
-
-          // Store in the right video's frame buffer
-          if (right_ptr->frames_.size() >= frame_buffer_size_) {
-            right_ptr->frames_.pop_back();
-          }
-          right_ptr->frames_.push_front(std::move(right_ptr->frame_));
+          right_ptr->pts_ = right_ptr->frames_[0]->pts - right_ptr->effective_time_shift_;
 
           // Reset frame offset so display shows the newly stepped frame
           frame_offset = 0;
@@ -1200,8 +1217,12 @@ void VideoCompare::compare() {
 
         if (steps_back <= buffered_frames) {
           // Fast path: target frame is already in the buffer — no seek needed.
-          // Pop the newest N frames from the front; the target becomes frames_[0].
+          // Move the newest N frames aside; the target becomes frames_[0].  They
+          // are kept rather than dropped so that stepping forward again can hand
+          // them back: the pipeline is not rewound here, so its head is N frames
+          // beyond the one now displayed.
           for (int i = 0; i < steps_back; i++) {
+            right_ptr->stepped_back_frames_.push_front(std::move(right_ptr->frames_.front()));
             right_ptr->frames_.pop_front();
           }
 
@@ -1274,13 +1295,19 @@ void VideoCompare::compare() {
         const bool now_playing = display_->get_play();
         if (now_playing && !was_playing) {
           for (auto& shift_pair : per_right_time_shifts) {
-            if (shift_pair.second != 0) {
-              const Side side = Side::Right(shift_pair.first);
-              SideState& rs = side_states.at(side);
-              const int64_t eff = compute_static_right_time_shift(shift_pair.first);
-              const float target = left.pts_ * AV_TIME_TO_SEC + rs.start_time_ + eff * AV_TIME_TO_SEC;
-              partial_seek_right_video(side, rs, eff, target);
+            const Side side = Side::Right(shift_pair.first);
+            SideState& rs = side_states.at(side);
+
+            // Steps that cancel out still leave the pipeline ahead of the display
+            // by the number of frames a backward step set aside, so a zero offset
+            // on its own does not mean the side is aligned.
+            if (shift_pair.second == 0 && rs.stepped_back_frames_.empty()) {
+              continue;
             }
+
+            const int64_t eff = compute_static_right_time_shift(shift_pair.first);
+            const float target = left.pts_ * AV_TIME_TO_SEC + rs.start_time_ + eff * AV_TIME_TO_SEC;
+            partial_seek_right_video(side, rs, eff, target);
           }
         }
         was_playing = now_playing;
@@ -1483,6 +1510,7 @@ void VideoCompare::compare() {
             side_state.decoded_picture_number_ = 1;
 
             side_state.frames_.clear();
+            side_state.stepped_back_frames_.clear();
           } else {
 #ifdef _DEBUG
             std::cout << "Side state frame is nullptr: " << side_state.side_.to_string() << std::endl;
@@ -1538,6 +1566,16 @@ void VideoCompare::compare() {
       previous_state = current_state;
 #endif
       auto pop_frame = [&](SideState& side_state) {
+        // Hand back frames set aside by a backward step before touching the
+        // pipeline, which that step left ahead of the displayed position.
+        if (!side_state.stepped_back_frames_.empty()) {
+          side_state.frame_ = std::move(side_state.stepped_back_frames_.front());
+          side_state.stepped_back_frames_.pop_front();
+          side_state.decoded_picture_number_++;
+
+          return true;
+        }
+
         const bool result = converted_frame_queues_[side_state.side_]->pop(side_state.frame_);
 
         if (result) {
