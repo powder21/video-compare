@@ -278,11 +278,51 @@ jobs:
           echo "Stripped executable. New size:"
           ls -lh video-compare
 
+      - name: Bundle the libraries it needs
+        run: |
+          set -euxo pipefail
+          brew install dylibbundler
+          dylibbundler -od -b -x video-compare -d libs -p @executable_path/libs
+
+          # Homebrew's sdl2 is an alias for sdl2-compat, which reaches SDL3 through
+          # dlopen once loaded.  dylibbundler only follows what the load commands
+          # declare, so it never learns SDL3 is needed at all.  The shim looks for
+          # it beside itself, which is where libs/ ends up.
+          cp "$(brew --prefix sdl3)/lib/libSDL3.0.dylib" libs/libSDL3.dylib
+          install_name_tool -id @executable_path/libs/libSDL3.dylib libs/libSDL3.dylib
+          codesign --force --sign - libs/libSDL3.dylib
+
+          du -sh libs
+          ls libs | wc -l
+
+      - name: Verify the bundle stands on its own
+        run: |
+          set -euxo pipefail
+
+          # Nothing may still name the Homebrew prefix this runner happens to have:
+          # whoever downloads this will not have the same one, if they have Homebrew
+          # at all.  Every bundled file was given an @executable_path id, so any
+          # mention of the prefix at this point is a real reference.
+          for f in video-compare libs/*.dylib; do
+            if otool -L "$f" | grep -q /opt/homebrew; then
+              echo "Still references Homebrew: $f"
+              otool -L "$f"
+              exit 1
+            fi
+          done
+
+          # Take the libraries off the machine and see whether it still runs.  This
+          # is what proves the bundle is complete: reading load commands cannot see
+          # a dlopen, which is exactly how the shim reaches SDL3.
+          brew uninstall --ignore-dependencies ffmpeg sdl2 sdl2_ttf sdl3
+          ./video-compare --version
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: video-compare-macos
           path: |
             video-compare
+            libs
             README.md
           retention-days: 90
