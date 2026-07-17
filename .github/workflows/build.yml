@@ -289,6 +289,10 @@ jobs:
           # declare, so it never learns SDL3 is needed at all.  The shim looks for
           # it beside itself, which is where libs/ ends up.
           cp "$(brew --prefix sdl3)/lib/libSDL3.0.dylib" libs/libSDL3.dylib
+          # Homebrew keeps its libraries read-only and cp carries that over, which
+          # leaves whoever downloads this unable to clear the quarantine flag off
+          # the file -- xattr needs to write to it.
+          chmod u+w libs/libSDL3.dylib
           install_name_tool -id @executable_path/libs/libSDL3.dylib libs/libSDL3.dylib
           codesign --force --sign - libs/libSDL3.dylib
 
@@ -307,6 +311,17 @@ jobs:
             if otool -L "$f" | grep -q /opt/homebrew; then
               echo "Still references Homebrew: $f"
               otool -L "$f"
+              exit 1
+            fi
+          done
+
+          # Everything has to be writable or the quarantine flag cannot be taken off
+          # it on the far side: xattr needs write access, and a read-only file stops
+          # the whole recursive sweep dead.
+          for f in video-compare libs/*.dylib; do
+            if [ ! -w "$f" ]; then
+              echo "Not writable, quarantine cannot be cleared from it: $f"
+              ls -l "$f"
               exit 1
             fi
           done
