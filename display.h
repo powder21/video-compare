@@ -213,6 +213,10 @@ class Display {
   bool show_left_{true};
   bool show_right_{true};
   bool show_hud_{true};
+  bool show_frame_numbers_{true};
+
+  AVRational left_frame_rate_{0, 1};
+  AVRational right_frame_rate_{0, 1};
   bool start_in_fullscreen_{false};
   bool is_fullscreen_{false};
   bool subtraction_mode_{false};
@@ -515,6 +519,7 @@ class Display {
 
   // Copy frame to display
   bool possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable);
+  void set_frame_rates(const AVRational& left_frame_rate, const AVRational& right_frame_rate);
 
   // Set a pending message to be displayed
   void set_pending_message(const std::string& message);

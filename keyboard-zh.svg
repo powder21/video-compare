@@ -156,8 +156,9 @@
 <text x="299.5" y="259.0" font-size="9" fill="#475569" text-anchor="middle">信息</text>
 <rect x="326.5" y="224.0" width="46.0" height="46" rx="5" fill="#fbfcfd" stroke="#e5e9ef" stroke-width="1"/>
 <text x="349.5" y="253.0" font-size="12" fill="#94a3b8" text-anchor="middle">B</text>
-<rect x="376.5" y="224.0" width="46.0" height="46" rx="5" fill="#fbfcfd" stroke="#e5e9ef" stroke-width="1"/>
-<text x="399.5" y="253.0" font-size="12" fill="#94a3b8" text-anchor="middle">N</text>
+<rect x="376.5" y="224.0" width="46.0" height="46" rx="5" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
+<text x="399.5" y="243.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">N</text>
+<text x="399.5" y="259.0" font-size="9" fill="#475569" text-anchor="middle">帧号</text>
 <rect x="426.5" y="224.0" width="46.0" height="46" rx="5" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
 <text x="449.5" y="243.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">M</text>
 <text x="449.5" y="259.0" font-size="9" fill="#475569" text-anchor="middle">指标</text>

@@ -832,7 +832,7 @@ void VideoCompare::dump_debug_info(const int frame_number, const int64_t effecti
 }
 
 struct SideState {
-  SideState(const Side& side, const Demuxer* demuxer) : side_(side), start_time_(demuxer->start_time() * AV_TIME_TO_SEC), frame_duration_deque_(8) {
+  SideState(const Side& side, const Demuxer* demuxer) : side_(side), start_time_(demuxer->start_time() * AV_TIME_TO_SEC), frame_rate_(demuxer->guess_frame_rate()), frame_duration_deque_(8) {
     if (start_time_ > 0) {
       sa_log_info(side, string_sprintf("Video has a start time of %s - timestamps will be shifted so they start at zero!", format_position(start_time_, true).c_str()));
     }
@@ -841,6 +841,11 @@ struct SideState {
   const Side side_;
 
   const float start_time_;
+
+  // The container's own frame rate, kept as the rational it is: reporting which
+  // frame this is divides by it, and 59.94 fps rounded to whole microseconds
+  // loses a frame every 25000 or so.
+  const AVRational frame_rate_;
 
   std::deque<AVFrameUniquePtr> frames_;
 
@@ -1825,6 +1830,8 @@ void VideoCompare::compare() {
 
           const auto left_display_frame = left_frames_ref[frame_offset].get();
           const auto right_display_frame = right_frames_ref[frame_offset].get();
+
+          display_->set_frame_rates(!display_->get_swap_left_right() ? left.frame_rate_ : right_ptr->frame_rate_, !display_->get_swap_left_right() ? right_ptr->frame_rate_ : left.frame_rate_);
           const auto left_state_frame = left.frames_[frame_offset].get();
           const auto right_state_frame = right_ptr->frames_[frame_offset].get();
 

@@ -175,6 +175,27 @@ inline float round_3(float value) {
   return std::round(value * 1000.0F) / 1000.0F;
 }
 
+// Which frame this is within its own video, counted from zero the way FFmpeg
+// does.  A frame keeps the PTS it was decoded with -- a time shift moves the
+// side's position, never the frame -- so this stays the number of the frame in
+// its own file, which is what makes the two sides comparable.
+//
+// Divided by the frame rate as the rational it is, rather than by a frame
+// duration in whole microseconds: 59.94 fps is 16683.33 us a frame, and the
+// third of a microsecond dropped by rounding costs a frame every 25000 or so --
+// four of them across an hour.
+//
+// Only meaningful at a constant frame rate.  A variable one has no frame rate to
+// divide by, and "which frame" stops being a question arithmetic can answer:
+// it takes an index of the file to say.
+static std::string format_frame_number(const AVFrame* frame, const AVRational& frame_rate) {
+  if (frame->pts == AV_NOPTS_VALUE || frame_rate.num <= 0 || frame_rate.den <= 0) {
+    return " #?";
+  }
+
+  return string_sprintf(" #%lld", static_cast<long long>(av_rescale_q_rnd(frame->pts, AV_TIME_BASE_Q, av_inv_q(frame_rate), AV_ROUND_NEAR_INF)));
+}
+
 static std::string format_position_difference(const float position1, const float position2) {
   // round both for the sake of consistency with the displayed positions
   const float position1_rounded = round_3(position1);
@@ -2174,6 +2195,11 @@ void Display::possibly_apply_crop() {
   crop_target_side_ = CropTargetSide::Undefined;
 }
 
+void Display::set_frame_rates(const AVRational& left_frame_rate, const AVRational& right_frame_rate) {
+  left_frame_rate_ = left_frame_rate;
+  right_frame_rate_ = right_frame_rate;
+}
+
 bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable) {
   // If crop preview is active, render preview and skip normal video rendering
   if (crop_preview_mode_ == CropPreviewMode::Active) {
@@ -2429,7 +2455,8 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     if (show_left_) {
       // file name and current position of left video
       const std::string left_picture_type(1, av_get_picture_type_char(left_frame->pict_type));
-      const std::string left_pos_str = format_position(left_position, true) + " " + left_picture_type + format_position_difference(left_position, right_position);
+      const std::string left_pos_str =
+          format_position(left_position, true) + " " + left_picture_type + format_position_difference(left_position, right_position) + (show_frame_numbers_ ? format_frame_number(left_frame, left_frame_rate_) : "");
       text_surface = TTF_RenderText_Blended(small_font_, left_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* left_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       const int left_position_text_width = text_surface->w;
@@ -2451,7 +2478,8 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     if (show_right_) {
       // file name and current position of right video
       const std::string right_picture_type(1, av_get_picture_type_char(right_frame->pict_type));
-      const std::string right_pos_str = format_position(right_position, true) + " " + right_picture_type + format_position_difference(right_position, left_position);
+      const std::string right_pos_str =
+          format_position(right_position, true) + " " + right_picture_type + format_position_difference(right_position, left_position) + (show_frame_numbers_ ? format_frame_number(right_frame, right_frame_rate_) : "");
       text_surface = TTF_RenderText_Blended(small_font_, right_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* right_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       int right_position_text_width = text_surface->w;
@@ -3307,6 +3335,9 @@ void Display::handle_event(const SDL_Event& event) {
           } else {
             show_hud_ = !show_hud_;
           }
+          break;
+        case SDLK_n:
+          show_frame_numbers_ = !show_frame_numbers_;
           break;
         case SDLK_0:
         case SDLK_KP_0:

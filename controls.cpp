@@ -4,6 +4,7 @@ static const std::vector<ControlSection> control_sections{
     {"Basic",
      {{"H", "Toggle on-screen help text for controls"},
       {"V", "Toggle video info overlay"},
+      {"N", "Toggle absolute frame numbers in the HUD (shown by default)"},
       {"Space", "Toggle play/pause"},
       {",", "Toggle bidirectional in-buffer loop/pause"},
       {".", "Toggle forward-only in-buffer loop/pause"},
