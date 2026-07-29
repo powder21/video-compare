@@ -96,8 +96,9 @@
 <rect x="439.0" y="124.0" width="46.0" height="46" rx="5" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
 <text x="462.0" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">I</text>
 <text x="462.0" y="159.0" font-size="9" fill="#475569" text-anchor="middle">缩放质量</text>
-<rect x="489.0" y="124.0" width="46.0" height="46" rx="5" fill="#fbfcfd" stroke="#e5e9ef" stroke-width="1"/>
-<text x="512.0" y="153.0" font-size="12" fill="#94a3b8" text-anchor="middle">O</text>
+<rect x="489.0" y="124.0" width="46.0" height="46" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="512.0" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">O</text>
+<text x="512.0" y="159.0" font-size="9" fill="#475569" text-anchor="middle">闪烁对比</text>
 <rect x="539.0" y="124.0" width="46.0" height="46" rx="5" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.4"/>
 <text x="562.0" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">P</text>
 <text x="562.0" y="159.0" font-size="9" fill="#475569" text-anchor="middle">取色</text>

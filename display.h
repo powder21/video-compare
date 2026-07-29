@@ -215,6 +215,13 @@ class Display {
   bool show_hud_{true};
   bool show_frame_numbers_{true};
 
+  // Blink comparison: one side at a time, flipped in place.  The eye catches a
+  // change far more readily than it catches a difference held side by side, so
+  // this finds what the slider hides.  The show flags on either side of it are
+  // kept so leaving puts the view back the way it was found.
+  bool blink_mode_{false};
+  bool blink_saved_show_left_{true};
+  bool blink_saved_show_right_{true};
   AVRational left_frame_rate_{0, 1};
   AVRational right_frame_rate_{0, 1};
   bool start_in_fullscreen_{false};

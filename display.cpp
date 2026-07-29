@@ -3308,6 +3308,11 @@ void Display::handle_event(const SDL_Event& event) {
           if (is_shift_down) {
             // Fallback for layouts where F-keys are inconvenient
             toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Histogram)] = true;
+          } else if (blink_mode_) {
+            // Blink mode always has exactly one side up, so these name a side
+            // rather than toggling one away and leaving nothing to look at.
+            show_left_ = true;
+            show_right_ = false;
           } else {
             show_left_ = !show_left_;
           }
@@ -3320,6 +3325,9 @@ void Display::handle_event(const SDL_Event& event) {
           if (is_shift_down) {
             // Fallback for layouts where F-keys are inconvenient
             toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Vectorscope)] = true;
+          } else if (blink_mode_) {
+            show_left_ = false;
+            show_right_ = true;
           } else {
             show_right_ = !show_right_;
           }
@@ -3338,6 +3346,20 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_n:
           show_frame_numbers_ = !show_frame_numbers_;
+          break;
+        case SDLK_o:
+          blink_mode_ = !blink_mode_;
+
+          if (blink_mode_) {
+            blink_saved_show_left_ = show_left_;
+            blink_saved_show_right_ = show_right_;
+            show_left_ = true;
+            show_right_ = false;
+            notify_user("Blink mode: left/right arrows flip, O leaves");
+          } else {
+            show_left_ = blink_saved_show_left_;
+            show_right_ = blink_saved_show_right_;
+          }
           break;
         case SDLK_0:
         case SDLK_KP_0:
@@ -3518,6 +3540,11 @@ void Display::handle_event(const SDL_Event& event) {
           }
           break;
         case SDLK_LEFT:
+          if (blink_mode_) {
+            show_left_ = !show_left_;
+            show_right_ = !show_left_;
+            break;
+          }
           seek_relative_ -= 1.0F * relative_seek_scale;
           break;
         case SDLK_DOWN:
@@ -3527,6 +3554,11 @@ void Display::handle_event(const SDL_Event& event) {
           seek_relative_ -= 600.0F * relative_seek_scale;
           break;
         case SDLK_RIGHT:
+          if (blink_mode_) {
+            show_left_ = !show_left_;
+            show_right_ = !show_left_;
+            break;
+          }
           seek_relative_ += 1.0F * relative_seek_scale;
           break;
         case SDLK_UP:

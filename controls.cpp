@@ -24,6 +24,7 @@ static const std::vector<ControlSection> control_sections{
       {"E", "Re-center view around mouse position"},
       {"R", "Global re-center and reset zoom to 100% (x1)"},
       {"S", "Swap left and right video"},
+      {"O", "Toggle blink comparison: show one side at a time (arrows flip, 1/2 pick a side)"},
       {"Tab", "Cycle through right videos"},
       {"1", "Toggle hide/show left video"},
       {"2", "Toggle hide/show right video"},
