@@ -377,11 +377,14 @@ Display::Display(const int display_number,
   startup_window_size_ = {window_width_, window_height_};
   saved_window_size_ = startup_window_size_;
 
-  // Check if window is larger than display and warn user
+  // Check if window is larger than display and warn user.  Not worth saying when
+  // going straight to full screen: the window measured here is the one that
+  // existed for the moment before that, and the size it could not have fitted
+  // into is not the size it ends up at.
   const int usable_width = bounds.w - border_width;
   const int usable_height = bounds.h - border_height;
 
-  if (window_width_ > usable_width || window_height_ > usable_height) {
+  if (!start_in_fullscreen_ && (window_width_ > usable_width || window_height_ > usable_height)) {
     std::cout << "WARNING: Window size (" << window_width_ << "x" << window_height_ << ") exceeds display area (" << usable_width << "x" << usable_height
               << "). Consider reducing the window size (use -W flag to resize) or using a larger display." << std::endl;
 
