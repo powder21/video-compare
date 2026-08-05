@@ -3,6 +3,24 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## v1.4 — 2026-08-05
+
+4K plays at the speed it says it does.
+
+- **A 4K 59.94 fps comparison ran at about half speed.** Frames are converted to
+  RGB on their way to the screen, and that conversion ran on one core. With the
+  high-quality flags used for aligning input resolutions a 3840x2160 frame costs
+  about 31 ms, against the 16.7 ms a 59.94 fps source allows, so playback
+  settled wherever the converter could keep up — around 31 fps, which at nominal
+  speed is slow motion. 1080p needs 10.4 ms and fitted, which is why only 4K
+  showed it. libswscale will spread the work across cores, but only through
+  `sws_scale_frame()`; `sws_scale()` ignores the thread count it is handed. Each
+  video now gets an equal share of the machine. Measured on a 10-core M4: the 4K
+  pair 31.2 -> 59 fps, a mixed 1080p/4K pair 25.3 -> 51, 1080p unchanged at
+  60.0. The picture is not affected — byte-identical to the single-threaded
+  result at every thread count, including the upscale, downscale and odd-width
+  paths, where a slice boundary could have left a seam.
+
 ## v1.3 — 2026-07-29
 
 Two things worth looking at, and a fork you can actually install.
@@ -94,12 +112,12 @@ Line numbers drift; the name beside each is what to search for.
 
 | Where | Issue | Why it is still here |
 |---|---|---|
-| `video_compare.cpp:955` (in `partial_seek_right_video`) | A partial seek can call `av_seek_frame` while the demuxer thread is inside `av_read_frame` on the same `AVFormatContext`. Undefined behaviour. The full seek path has a handshake for this; the partial one does not. | Needs slow I/O (a network stream, a loaded machine) to hit the window. No way to reproduce on demand. |
-| `video_compare.cpp:1362` (the pause-to-play realign) | When the realign on resume cannot produce a frame, its failure is discarded and the picture stops with nothing said. | Requires a seek target past the end of the file, and the ordinary seek path usually gets there first. Could not be reproduced. |
-| `video_compare.cpp:965` (in `partial_seek_right_video`) | With a time-shift multiplier other than 1, a partial seek aims at a position that leaves out the multiplier's own contribution. The full seek path includes it. | Needs `--time-shift` with a multiplier. Untested. |
-| `video_compare.cpp:1226` (forward stepping) | A forward step that seeks and then meets the end of the file reports "reached end of video" although the offset did move. | Cosmetic. |
-| `video_compare.cpp:1740` (in `update_frame_timing`) | Stepping still feeds the frame-duration average samples that are not frame durations, so `delta_pts_` can be off. | The offset no longer depends on it as of v1.2. What is left of it reaches the sync tolerance and the durations stamped on frames. |
-| `video_compare.cpp:1634` (in `pop_frame`) | Shift+D after a backward step is served from the frames set aside by that step. Believed right, and it behaves that way in use. | No log evidence either way — the debug print cannot tell it apart from ordinary playback. |
+| `video_compare.cpp:966` (in `partial_seek_right_video`) | A partial seek can call `av_seek_frame` while the demuxer thread is inside `av_read_frame` on the same `AVFormatContext`. Undefined behaviour. The full seek path has a handshake for this; the partial one does not. | Needs slow I/O (a network stream, a loaded machine) to hit the window. No way to reproduce on demand. |
+| `video_compare.cpp:1373` (the pause-to-play realign) | When the realign on resume cannot produce a frame, its failure is discarded and the picture stops with nothing said. | Requires a seek target past the end of the file, and the ordinary seek path usually gets there first. Could not be reproduced. |
+| `video_compare.cpp:976` (in `partial_seek_right_video`) | With a time-shift multiplier other than 1, a partial seek aims at a position that leaves out the multiplier's own contribution. The full seek path includes it. | Needs `--time-shift` with a multiplier. Untested. |
+| `video_compare.cpp:1237` (forward stepping) | A forward step that seeks and then meets the end of the file reports "reached end of video" although the offset did move. | Cosmetic. |
+| `video_compare.cpp:1751` (in `update_frame_timing`) | Stepping still feeds the frame-duration average samples that are not frame durations, so `delta_pts_` can be off. | The offset no longer depends on it as of v1.2. What is left of it reaches the sync tolerance and the durations stamped on frames. |
+| `video_compare.cpp:1645` (in `pop_frame`) | Shift+D after a backward step is served from the frames set aside by that step. Believed right, and it behaves that way in use. | No log evidence either way — the debug print cannot tell it apart from ordinary playback. |
 
 ### Notes
 
@@ -108,3 +126,9 @@ Line numbers drift; the name beside each is what to search for.
 - Stepping across a dropped frame reports the two frame durations it covered
   rather than one. The count follows the picture, and on such material a frame
   count and a time span are not the same thing.
+- Frames reach the screen as RGB24, which Metal cannot hold, so SDL converts
+  each one to ARGB8888 on the CPU first — about 3 ms per 4K frame, now the
+  largest single cost on the main thread. Comparing two 4K videos of unequal
+  resolution still falls a little short of 59.94 fps for the same reason the
+  conversion is expensive at all: the smaller side is scaled up to the larger
+  before either is drawn.
