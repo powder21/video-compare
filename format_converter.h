@@ -16,7 +16,8 @@ class FormatConverter : public SideAware {
                   const AVColorSpace src_color_space,
                   const AVColorRange src_color_range,
                   const Side& side = NONE,
-                  const int flags = SWS_FAST_BILINEAR);
+                  const int flags = SWS_FAST_BILINEAR,
+                  const int threads = 1);
   ~FormatConverter();
 
   void init();
@@ -48,6 +49,8 @@ class FormatConverter : public SideAware {
 
   int active_flags_;
   int pending_flags_;
+
+  const int threads_;
 
   SwsContext* conversion_context_{};
 };

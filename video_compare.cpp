@@ -16,6 +16,7 @@
 #include "string_utils.h"
 #include "video_filter_context.h"
 extern "C" {
+#include <libavutil/cpu.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/time.h>
@@ -43,11 +44,6 @@ static auto avpacket_deleter = [](AVPacket* packet) {
 };
 
 static auto avframe_deleter = [](AVFrame* frame) { av_frame_free(&frame); };
-
-static auto avframe_and_data_deleter = [](AVFrame* frame) {
-  av_freep(&frame->data[0]);
-  avframe_deleter(frame);
-};
 
 static inline bool is_behind(int64_t frame1_pts, int64_t frame2_pts, int64_t delta_pts) {
   const float t1 = static_cast<float>(frame1_pts) * AV_TIME_TO_SEC;
@@ -151,6 +147,14 @@ static inline int determine_sws_flags(const bool fast) {
 
 static inline bool use_fast_input_alignment(const VideoCompareConfig& config) {
   return config.fast_input_alignment;
+}
+
+// Every video converts on its own thread, so share the cores between them
+// rather than letting each ask for the whole machine.
+static inline int determine_conversion_threads(const size_t number_of_videos) {
+  const int cpu_count = std::max(1, av_cpu_count());
+
+  return std::max(1, cpu_count / static_cast<int>(std::max<size_t>(1, number_of_videos)));
 }
 
 static void sleep_for_ms(const uint32_t ms) {
@@ -367,7 +371,7 @@ void VideoCompare::recreate_format_converter_for_side(const Side& side, const in
   const auto& filterer = video_filterers_.at(side);
   ready_to_seek_.init(ReadyToSeek::ProcessorThread::Converter, side);
   format_converters_[side] = std::make_unique<FormatConverter>(filterer->dest_width(), filterer->dest_height(), max_width_, max_height_, filterer->dest_pixel_format(), output_pixel_format, video_decoders_[side]->color_space(),
-                                                               video_decoders_[side]->color_range(), side, sws_flags);
+                                                               video_decoders_[side]->color_range(), side, sws_flags, determine_conversion_threads(video_filterers_.size()));
 }
 
 void VideoCompare::recreate_format_converters(const int sws_flags) {
@@ -613,12 +617,19 @@ void VideoCompare::format_convert_video(const Side& side) {
 
       if (filtered_frame_queues_[side]->pop(frame_filtered)) {
         // scale and convert pixel format before pushing to frame queue for displaying
-        AVFrameUniquePtr frame_converted{av_frame_alloc(), avframe_and_data_deleter};
+        AVFrameUniquePtr frame_converted{av_frame_alloc(), avframe_deleter};
 
         if (av_frame_copy_props(frame_converted.get(), frame_filtered.get()) < 0) {
           throw std::runtime_error("Copying filtered frame properties");
         }
-        if (av_image_alloc(frame_converted->data, frame_converted->linesize, format_converters_[side]->dest_width(), format_converters_[side]->dest_height(), format_converters_[side]->dest_pixel_format(), 64) < 0) {
+
+        // must be a refcounted buffer, otherwise the converter swaps in one of
+        // its own and this frame's data is orphaned
+        frame_converted->format = format_converters_[side]->dest_pixel_format();
+        frame_converted->width = format_converters_[side]->dest_width();
+        frame_converted->height = format_converters_[side]->dest_height();
+
+        if (av_frame_get_buffer(frame_converted.get(), 64) < 0) {
           throw std::runtime_error("Allocating converted picture");
         }
         (*format_converters_[side])(frame_filtered.get(), frame_converted.get());

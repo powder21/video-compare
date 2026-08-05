@@ -62,7 +62,13 @@ static const int MIN_WINDOW_WIDTH = 4;
 static const int MIN_WINDOW_HEIGHT = 1;
 
 auto frame_deleter = [](AVFrame* frame) {
-  av_freep(&frame->data[0]);
+  // frames allocated with av_image_alloc own their data outright; refcounted
+  // ones are released by av_frame_free itself, and freeing data[0] by hand
+  // would be a double free
+  if (frame->buf[0] == nullptr) {
+    av_freep(&frame->data[0]);
+  }
+
   av_frame_free(&frame);
 };
 using AVFramePtr = std::unique_ptr<AVFrame, decltype(frame_deleter)>;
@@ -1533,7 +1539,9 @@ const std::array<int, 3> Display::convert_rgb_to_yuv(const std::array<int, 3> rg
     raw_frame->colorspace = color_space;
     raw_frame->color_range = color_range;
 
-    ffmpeg::check(av_image_alloc(raw_frame->data, raw_frame->linesize, raw_frame->width, raw_frame->height, format, 64));
+    // refcounted, so the format converter writes into this buffer instead of
+    // substituting its own
+    ffmpeg::check(av_frame_get_buffer(raw_frame, 64));
 
     return AVFramePtr(raw_frame, frame_deleter);
   };

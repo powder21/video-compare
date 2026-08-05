@@ -2,6 +2,10 @@
 #include <iostream>
 #include "ffmpeg.h"
 
+extern "C" {
+#include "libavutil/opt.h"
+}
+
 static constexpr int FIXED_1_0 = (1 << 16);
 
 inline int get_sws_colorspace(const AVColorSpace color_space) {
@@ -37,7 +41,8 @@ FormatConverter::FormatConverter(const size_t src_width,
                                  const AVColorSpace src_color_space,
                                  const AVColorRange src_color_range,
                                  const Side& side,
-                                 const int flags)
+                                 const int flags,
+                                 const int threads)
     : SideAware(side),
       src_width_{src_width},
       src_height_{src_height},
@@ -48,7 +53,8 @@ FormatConverter::FormatConverter(const size_t src_width,
       src_color_space_{src_color_space},
       src_color_range_{src_color_range},
       active_flags_(flags),
-      pending_flags_(active_flags_) {
+      pending_flags_(active_flags_),
+      threads_(threads) {
   ScopedLogSide scoped_log_side(side);
 
   init();
@@ -59,13 +65,27 @@ FormatConverter::~FormatConverter() {
 }
 
 void FormatConverter::init() {
-  conversion_context_ = sws_getContext(
-      // Source
-      src_width(), src_height(), src_pixel_format(),
-      // Destination
-      dest_width(), dest_height(), dest_pixel_format(),
-      // Filters
-      active_flags_, nullptr, nullptr, nullptr);
+  // Built option by option rather than via sws_getContext so that the thread
+  // count can be set before initialization; swscale only spreads a conversion
+  // across cores when it is told how many it may use, and only does so via
+  // sws_scale_frame().  A 4K frame takes ~31 ms to convert on one core, which
+  // on its own puts a 59.94 fps source into slow motion.
+  conversion_context_ = sws_alloc_context();
+
+  if (conversion_context_ == nullptr) {
+    throw ffmpeg::Error{"Couldn't allocate conversion context"};
+  }
+
+  av_opt_set_int(conversion_context_, "srcw", src_width(), 0);
+  av_opt_set_int(conversion_context_, "srch", src_height(), 0);
+  av_opt_set_int(conversion_context_, "src_format", src_pixel_format(), 0);
+  av_opt_set_int(conversion_context_, "dstw", dest_width(), 0);
+  av_opt_set_int(conversion_context_, "dsth", dest_height(), 0);
+  av_opt_set_int(conversion_context_, "dst_format", dest_pixel_format(), 0);
+  av_opt_set_int(conversion_context_, "sws_flags", active_flags_, 0);
+  av_opt_set_int(conversion_context_, "threads", threads_, 0);
+
+  ffmpeg::check(sws_init_context(conversion_context_, nullptr, nullptr));
 
   // set colorspace details
   const int sws_color_space = get_sws_colorspace(src_color_space_);
@@ -157,13 +177,22 @@ void FormatConverter::operator()(AVFrame* src, AVFrame* dst) {
 
   set_frame_key(dst, frame_key);
 
-  sws_scale(conversion_context_,
-            // Source
-            src->data, src->linesize, 0, src_height_,
-            // Destination
-            dst->data, dst->linesize);
-
   dst->format = dest_pixel_format();
   dst->width = dest_width();
   dst->height = dest_height();
+
+  // swscale retags the destination as RGB/unspecified, but callers rely on the
+  // converted frame still carrying the source's colorimetry: the pixel readout
+  // inverts RGB back to YUV with it, and VMAF feeds it to setparams.
+  const AVColorSpace colorspace = dst->colorspace;
+  const AVColorRange color_range = dst->color_range;
+
+  // sws_scale_frame() rather than sws_scale(): it is the only entry point that
+  // honours the thread count set in init().  It keeps the destination's own
+  // buffer as long as that buffer is refcounted, so callers must allocate with
+  // av_frame_get_buffer() and not av_image_alloc().
+  ffmpeg::check(sws_scale_frame(conversion_context_, dst, src));
+
+  dst->colorspace = colorspace;
+  dst->color_range = color_range;
 }
