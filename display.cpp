@@ -3043,14 +3043,17 @@ void Display::handle_event(const SDL_Event& event) {
             break;
           case SDLK_r:
             // Reset preview zoom/pan to fit-in-window
-            {
-              const float scale_x = static_cast<float>(window_width_) / static_cast<float>(crop_preview_width_);
-              const float scale_y = static_cast<float>(window_height_) / static_cast<float>(crop_preview_height_);
-              preview_scale_ = std::min(scale_x, scale_y) * 0.9F;
-              preview_offset_ = Vector2D(
-                  (static_cast<float>(window_width_) - crop_preview_width_ * preview_scale_) / 2.0F,
-                  (static_cast<float>(window_height_) - crop_preview_height_ * preview_scale_) / 2.0F);
-            }
+            set_crop_preview_scale(crop_preview_fit_scale());
+            break;
+          case SDLK_4:
+          case SDLK_KP_4:
+            // One source pixel per physical display pixel
+            set_crop_preview_scale(1.0F / std::max({drawable_to_window_width_factor_, drawable_to_window_height_factor_, 1e-3F}));
+            break;
+          case SDLK_6:
+          case SDLK_KP_6:
+            // 100%: one source pixel per window point
+            set_crop_preview_scale(1.0F);
             break;
           default:
             break;
@@ -3964,17 +3967,36 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
   }
 
   // Initialize preview zoom/pan to fit the entire image in the window
-  const float scale_x = static_cast<float>(window_width_) / static_cast<float>(concat_width);
-  const float scale_y = static_cast<float>(window_height_) / static_cast<float>(selection_rect.h);
-  preview_scale_ = std::min(scale_x, scale_y) * 0.9F;  // 90% of window for margin
-  preview_offset_ = Vector2D(
-      (static_cast<float>(window_width_) - concat_width * preview_scale_) / 2.0F,
-      (static_cast<float>(window_height_) - selection_rect.h * preview_scale_) / 2.0F);
+  set_crop_preview_scale(crop_preview_fit_scale());
 
   crop_preview_mode_ = CropPreviewMode::Active;
 
   // Pause playback while previewing
   play_ = false;
+}
+
+// Scale that fits the whole preview in the window, with a margin
+float Display::crop_preview_fit_scale() const {
+  if (crop_preview_width_ <= 0 || crop_preview_height_ <= 0) {
+    return 1.0F;
+  }
+
+  const float scale_x = static_cast<float>(window_width_) / static_cast<float>(crop_preview_width_);
+  const float scale_y = static_cast<float>(window_height_) / static_cast<float>(crop_preview_height_);
+
+  return std::min(scale_x, scale_y) * 0.9F;  // 90% of window for margin
+}
+
+// Set an absolute preview zoom and re-center on the window
+void Display::set_crop_preview_scale(const float scale) {
+  if (crop_preview_width_ <= 0 || crop_preview_height_ <= 0) {
+    return;
+  }
+
+  preview_scale_ = scale;
+  preview_offset_ = Vector2D(
+      (static_cast<float>(window_width_) - crop_preview_width_ * preview_scale_) / 2.0F,
+      (static_cast<float>(window_height_) - crop_preview_height_ * preview_scale_) / 2.0F);
 }
 
 void Display::render_crop_preview() {
@@ -4037,9 +4059,26 @@ void Display::render_crop_preview() {
     }
   }
 
+  // Render the current zoom factor in the top left corner, where a narrow window
+  // cannot clip it the way it clips the centered instruction line below
+  {
+    const std::string zoom_str = preview_scale_ < 1.0F ? string_sprintf("x%1.3f", preview_scale_) : string_sprintf("x%1.2f", preview_scale_);
+    SDL_Surface* zoom_surface = render_text_with_fallback(zoom_str);
+    if (zoom_surface) {
+      SDL_Texture* zoom_texture = SDL_CreateTextureFromSurface(renderer_, zoom_surface);
+      if (zoom_texture) {
+        SDL_Rect zoom_rect = {10, 10, zoom_surface->w, zoom_surface->h};
+        SDL_RenderCopy(renderer_, zoom_texture, nullptr, &zoom_rect);
+        SDL_DestroyTexture(zoom_texture);
+      }
+      SDL_FreeSurface(zoom_surface);
+    }
+  }
+
   // Render instruction text at bottom center
   {
-    const std::string instructions = "[Enter] Save concat  |  [Shift+Enter] Save all  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [R] Reset";
+    const std::string instructions =
+        "[Enter] Save concat  |  [Shift+Enter] Save all  |  [Esc] Cancel  |  [Right-drag] Pan  |  [Scroll] Zoom  |  [4] 1:1  |  [6] 100%  |  [R] Fit";
     SDL_Surface* text_surface = render_text_with_fallback(instructions);
     if (text_surface) {
       SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);

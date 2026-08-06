@@ -246,7 +246,7 @@ see all supported options.
 - `Shift+A`: Seek to the previous frame (best with intra-frame formats)
 - `Shift+M`: Cycle display mode
 - `Shift+S`: Cycle aspect view mode
-- `Shift+F`: Select a region and save cutouts as PNGs
+- `Shift+F`: Select a region and open a crop preview; in the preview, `4` zooms to 1:1 pixels, `6` to 100%, `R` fits the window, `Enter` saves the concatenation and `Shift+Enter` saves every cutout
 - `Shift+X`: Print display state to console
 - `Shift+W`: Restore saved window size
 - `Ctrl+W`: Restore startup window size

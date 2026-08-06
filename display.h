@@ -476,6 +476,8 @@ class Display {
 
   void enter_crop_preview(const AVFrame* left_frame);
   void render_crop_preview();
+  float crop_preview_fit_scale() const;
+  void set_crop_preview_scale(float scale);
   void exit_crop_preview(bool save, bool save_all = false);
   void save_crop_preview_images(bool save_all);
   void destroy_crop_preview();
