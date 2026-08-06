@@ -3,6 +3,23 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## v1.5 — 2026-08-06
+
+The crop preview can be put at a zoom you can name.
+
+- **It only zoomed by wheel, against nothing.** The preview `Shift+F` opens had
+  the wheel and `R`, and `R` fits the window at nine tenths — so the one thing
+  the preview is for, looking at pixels, could not be set to 1:1 except by
+  hunting for it. `4` now puts one source pixel on one physical display pixel
+  and `6` puts it on one window point. The two differ by the backing scale
+  factor, so on a Retina display `4` is half of `6`, and on a 1x display they
+  are the same key twice. Both match what those keys already mean in the main
+  view. `R` still fits, and the hint line now calls it Fit rather than Reset,
+  which is what it always did.
+- **The zoom factor is shown**, top left, so the wheel has something to land on.
+  It is deliberately not on the hint line: that line is centred and a narrow
+  window clips it from both ends, taking the one part that changes with it.
+
 ## v1.4 — 2026-08-05
 
 4K plays at the speed it says it does.
