@@ -4262,6 +4262,8 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
 
   // Pause playback while previewing
   play_ = false;
+
+  std::cout << string_sprintf("Crop preview: %dx%d at %d,%d", selection_rect.w, selection_rect.h, selection_rect.x, selection_rect.y) << std::endl;
 }
 
 // Scale that fits the whole preview in the window, with a margin

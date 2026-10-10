@@ -174,7 +174,13 @@ integration: $(integration_bin)
 	echo "Running $(integration_bin) right-step"; \
 	$$wrap ./$(integration_bin) right-step "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
 	echo "Running $(integration_bin) right-step (single decoder)"; \
-	$$wrap ./$(integration_bin) right-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"
+	$$wrap ./$(integration_bin) right-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
+	echo "Running $(integration_bin) right-step-play"; \
+	$$wrap ./$(integration_bin) right-step-play "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
+	echo "Running $(integration_bin) right-step-play (single decoder)"; \
+	$$wrap ./$(integration_bin) right-step-play "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
+	echo "Running $(integration_bin) crop-preview"; \
+	$$wrap ./$(integration_bin) crop-preview "$$media/crop_left_320.mp4" "$$media/crop_right1_320.mp4"
 
 .PHONY: stress
 stress: $(integration_bin)

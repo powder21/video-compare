@@ -1,6 +1,7 @@
 #define SDL_MAIN_HANDLED
 #include "video_compare.h"
 #include <SDL2/SDL.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -22,7 +23,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -68,6 +69,10 @@ const char* scenario_name(const Scenario scenario) {
       return "dynamic-swap";
     case Scenario::RightStep:
       return "right-step";
+    case Scenario::RightStepPlay:
+      return "right-step-play";
+    case Scenario::CropPreview:
+      return "crop-preview";
   }
   return "unknown";
 }
@@ -83,7 +88,7 @@ int watchdog_ticks_for(const Scenario scenario) {
   if (scenario == Scenario::CropCopy) {
     return 400;
   }
-  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep) {
+  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep || scenario == Scenario::RightStepPlay) {
     return 250;
   }
   return is_stress_scenario(scenario) ? 250 : 120;
@@ -916,6 +921,56 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     sleep_ms(300);
     step(SDLK_0, SDL_SCANCODE_0, KMOD_CTRL);
     dump_display_filters();  // 7: right 2, reset
+  } else if (scenario == Scenario::RightStepPlay) {
+    // The larger steps, the start-of-file clamp, and what becomes of the
+    // offsets once playback resumes and a seek lands mid-play.
+    auto key = [](const SDL_Keycode code, const SDL_Scancode scancode, const int wait_ms, const SDL_Keymod mod = KMOD_NONE) {
+      push_keydown(code, scancode, 0, mod);
+      sleep_ms(wait_ms);
+    };
+    key(SDLK_SPACE, SDL_SCANCODE_SPACE, 400);
+    dump_display_filters();  // 0: right 1, level
+    key(SDLK_MINUS, SDL_SCANCODE_MINUS, 500);
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS, 500);
+    dump_display_filters();  // 1: right 1, - then + undo each other
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS, 700, KMOD_CTRL);
+    dump_display_filters();  // 2: right 1, +10
+    key(SDLK_TAB, SDL_SCANCODE_TAB, 300);
+    key(SDLK_MINUS, SDL_SCANCODE_MINUS, 900, KMOD_ALT);
+    dump_display_filters();  // 3: right 2, -100 clamped at its first frame
+    // Keep playback short: right 1 runs 10 frames ahead and must not reach the
+    // end of the 100-frame fixture before the last dump.
+    key(SDLK_TAB, SDL_SCANCODE_TAB, 300);
+    key(SDLK_SPACE, SDL_SCANCODE_SPACE, 500);
+    key(SDLK_SPACE, SDL_SCANCODE_SPACE, 400);
+    dump_display_filters();  // 4: right 1 after playing, still +10
+    key(SDLK_TAB, SDL_SCANCODE_TAB, 300);
+    dump_display_filters();  // 5: right 2 after playing, still clamped offset
+    key(SDLK_SPACE, SDL_SCANCODE_SPACE, 300);
+    key(SDLK_RIGHT, SDL_SCANCODE_RIGHT, 500);
+    key(SDLK_SPACE, SDL_SCANCODE_SPACE, 400);
+    dump_display_filters();  // 6: right 2 after a seek during playback
+    key(SDLK_TAB, SDL_SCANCODE_TAB, 300);
+    dump_display_filters();  // 7: right 1 after a seek during playback
+  } else if (scenario == Scenario::CropPreview) {
+    // Shift+F selects the same way Shift+L/R/B do; window and clips are both
+    // 320x180, so the selection should come out in the gesture's own pixels.
+    // Enter/Shift+Enter would open the native folder picker, so only cancel.
+    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
+    sleep_ms(400);
+    push_crop_gesture(SDLK_f, SDL_SCANCODE_F, 20, 20, 140, 100);
+    sleep_ms(700);
+    for (const SDL_Keycode code : {SDLK_4, SDLK_6, SDLK_r}) {
+      push_keydown(code, SDL_GetScancodeFromKey(code), 0);
+      sleep_ms(200);
+    }
+    push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
+    sleep_ms(400);
+    // dragged up and to the left
+    push_crop_gesture(SDLK_f, SDL_SCANCODE_F, 300, 170, 200, 60);
+    sleep_ms(700);
+    push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
+    sleep_ms(400);
   }
 
   push_quit();
@@ -957,7 +1012,7 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
   reset_helper_counters();
 
   VideoCompareConfig config = make_config(resolved);
-  if (scenario == Scenario::SyncMismatch || scenario == Scenario::MultiRightSync || scenario == Scenario::CropCopy || scenario == Scenario::InteractiveCrop) {
+  if (scenario == Scenario::SyncMismatch || scenario == Scenario::MultiRightSync || scenario == Scenario::CropCopy || scenario == Scenario::InteractiveCrop || scenario == Scenario::CropPreview) {
     // Auto fps= would otherwise lift 25 fps to 30 and hide the sync path.
     // crop-copy also wants a clean Shift+X chain so crop= is the only extra filter.
     config.disable_auto_filters = true;
@@ -1556,6 +1611,88 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
         std::printf("PASS right-step stepped each right video on its own, kept the offsets across a seek, and reset them\n");
       }
     }
+  } else if (scenario == Scenario::RightStepPlay) {
+    const std::vector<FilterDump> dumps = parse_display_filters(output);
+    auto fail_play = [&](const std::string& message) {
+      std::fprintf(stderr, "FAIL right-step-play: %s\n", message.c_str());
+      for (size_t i = 0; i < dumps.size(); ++i) {
+        std::fprintf(stderr, "dump %zu: right=%s frame_left=%s frame_right=%s\n", i, dumps[i].right_id.c_str(), dumps[i].frame_left.c_str(), dumps[i].frame_right.c_str());
+      }
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    };
+
+    constexpr size_t kDumps = 8;
+    const char* const right_ids[kDumps] = {"1", "1", "1", "2", "1", "2", "2", "1"};
+    int left[kDumps] = {};
+    int right[kDumps] = {};
+    if (dumps.size() < kDumps) {
+      fail_play("expected " + std::to_string(kDumps) + " Shift+X dumps, got " + std::to_string(dumps.size()));
+    }
+    for (size_t i = 0; i < kDumps && exit_code == EXIT_SUCCESS; ++i) {
+      if (std::sscanf(dumps[i].frame_left.c_str(), "%d", &left[i]) != 1 || std::sscanf(dumps[i].frame_right.c_str(), "%d", &right[i]) != 1) {
+        fail_play("no frame numbers in dump " + std::to_string(i));
+      } else if (dumps[i].right_id != right_ids[i]) {
+        fail_play("wrong active right in dump " + std::to_string(i));
+      }
+    }
+    auto offset = [&](const size_t i) { return right[i] - left[i]; };
+    if (exit_code == EXIT_SUCCESS) {
+      const int clamped = offset(3);
+      if (offset(0) != 0) {
+        fail_play("sides were not level before stepping");
+      } else if (offset(1) != 0 || left[1] != left[0]) {
+        fail_play("- then + did not put right 1 back where it was");
+      } else if (offset(2) != 10 || left[2] != left[0]) {
+        fail_play("Ctrl++ did not step right 1 by 10 frames alone");
+      } else if (right[3] != 0 || left[3] != left[0]) {
+        fail_play("Alt+- past the start did not stop right 2 at its first frame");
+      } else if (output.find("Right #2: ") == std::string::npos || output.find("reached start") == std::string::npos) {
+        fail_play("no reached-start notice for right 2");
+      } else if (!(left[4] > left[3])) {
+        fail_play("playback did not move the left forward");
+      } else if (offset(4) != 10) {
+        fail_play("right 1 lost its +10 once playback resumed: " + std::to_string(offset(4)));
+      } else if (offset(5) != clamped) {
+        fail_play("right 2 lost its offset once playback resumed: " + std::to_string(offset(5)) + " vs " + std::to_string(clamped));
+      } else if (!(left[6] > left[5])) {
+        fail_play("seek during playback did not move the left forward");
+      } else if (offset(6) != clamped) {
+        fail_play("right 2 lost its offset across a seek during playback: " + std::to_string(offset(6)) + " vs " + std::to_string(clamped));
+      } else if (offset(7) != 10) {
+        fail_play("right 1 lost its +10 across a seek during playback: " + std::to_string(offset(7)));
+      } else {
+        std::printf("PASS right-step-play: -/+ undo, Ctrl +10, Alt -100 clamped at %d, offsets kept through playback and a seek mid-play\n", clamped);
+      }
+    }
+  } else if (scenario == Scenario::CropPreview) {
+    std::vector<std::string> selections;
+    const std::string prefix = "Crop preview: ";
+    size_t pos = 0;
+    while ((pos = output.find(prefix, pos)) != std::string::npos) {
+      pos += prefix.size();
+      const size_t end = output.find_first_of("\r\n", pos);
+      selections.push_back(output.substr(pos, end == std::string::npos ? std::string::npos : end - pos));
+    }
+    size_t cancels = 0;
+    for (size_t at = output.find("Crop preview cancelled"); at != std::string::npos; at = output.find("Crop preview cancelled", at + 1)) {
+      ++cancels;
+    }
+    // "Crop preview cancelled" also starts with the prefix; keep the selections only.
+    selections.erase(std::remove(selections.begin(), selections.end(), std::string("cancelled")), selections.end());
+
+    if (selections.size() != 2 || cancels != 2) {
+      std::fprintf(stderr, "FAIL crop-preview: expected 2 previews and 2 cancels, got %zu and %zu\ncaptured stdout:\n%s\n", selections.size(), cancels, output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (selections[0] != "120x80 at 20,20") {
+      std::fprintf(stderr, "FAIL crop-preview: drag 20,20 -> 140,100 selected %s\n", selections[0].c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (selections[1] != "100x110 at 200,60") {
+      std::fprintf(stderr, "FAIL crop-preview: drag 300,170 -> 200,60 selected %s\n", selections[1].c_str());
+      exit_code = EXIT_FAILURE;
+    } else {
+      std::printf("PASS crop-preview selected exactly what was dragged, either way round, and 4/6/R/Esc kept it alive\n");
+    }
   }
 
   if (exit_code == EXIT_SUCCESS) {
@@ -1582,6 +1719,8 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s interactive-crop LEFT RIGHT\n", argv0);
   std::fprintf(stderr, "  %s dynamic-swap LEFT RIGHT\n", argv0);
   std::fprintf(stderr, "  %s right-step LEFT RIGHT0 RIGHT1\n", argv0);
+  std::fprintf(stderr, "  %s right-step-play LEFT RIGHT0 RIGHT1\n", argv0);
+  std::fprintf(stderr, "  %s crop-preview LEFT RIGHT\n", argv0);
 }
 
 }  // namespace
@@ -1703,6 +1842,20 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::RightStep, files);
+    }
+    if (name == "right-step-play") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::RightStepPlay, files);
+    }
+    if (name == "crop-preview") {
+      if (files.size() != 2) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::CropPreview, files);
     }
   } catch (const std::exception& exception) {
     std::fprintf(stderr, "FAIL %s\n", exception.what());
