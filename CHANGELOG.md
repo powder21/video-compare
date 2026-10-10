@@ -40,6 +40,31 @@ What it took on this side:
 - The macOS build stays on Apple Silicon; upstream moved theirs to an Intel
   runner.
 
+## v1.6.1 — 2026-10-10
+
+One thing v1.6 broke and two that were always there.
+
+- **With `-d` the split ran ahead of the cursor.** Upstream now reads the mouse
+  position from each event, and SDL reports those in drawable pixels, because
+  the renderer's logical size is the drawable size, while everything else here
+  works in window points. On a 2x display under `-d` the split sat at twice the
+  cursor's distance from the left edge, click-to-seek went twice as far, and
+  crop selections, Shift+F's included, started in the wrong place. The crop
+  preview's right-drag pan had the same mismatch on its relative motion since
+  v1.0, moving twice as fast as the cursor; it is fixed alongside.
+- **Chinese in on-screen messages came out as mojibake.** The "Saved ...
+  image" message carries file names and directories, and messages were drawn
+  as Latin-1. They are UTF-8 now, and borrow the embedded CJK font when the
+  font in use, which is picked from the filenames, lacks a glyph, so a Chinese
+  save directory beside Latin filenames shows too.
+- **No input method popup on every shortcut.** SDL2 starts text input by
+  default, which hands each key press to the input method first; with Chinese
+  input selected, every shortcut letter opened a candidate window. Nothing here
+  takes typed text, so it is off.
+- `-V`, the usage line and the verbose dump read
+  `v1.6.1/by larry (upstream 20261004-osaka)`, the fork's release beside the
+  upstream one it is based on.
+
 ## v1.5 — 2026-08-06
 
 The crop preview can be put at a zoom you can name.
@@ -50,8 +75,8 @@ The crop preview can be put at a zoom you can name.
   hunting for it. `4` now puts one source pixel on one physical display pixel
   and `6` puts it on one window point. The two differ by the backing scale
   factor, so on a Retina display `4` is half of `6`, and on a 1x display they
-  are the same key twice. Both match what those keys already mean in the main
-  view. `R` still fits, and the hint line now calls it Fit rather than Reset,
+  are the same key twice. `4` means what it means in the main view; the main
+  view's `6` is different, a return to the fit-to-window x1. `R` still fits, and the hint line now calls it Fit rather than Reset,
   which is what it always did.
 - **The zoom factor is shown**, top left, so the wheel has something to land on.
   It is deliberately not on the hint line: that line is centred and a narrow
