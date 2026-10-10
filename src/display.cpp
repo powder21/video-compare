@@ -373,6 +373,12 @@ Display::Display(const int display_number,
   window_ = check_sdl(SDL_CreateWindow(format_window_title(left_file_name, right_file_name).c_str(), window_x, window_y, window_width, window_height, high_dpi_allowed_ ? create_window_flags | SDL_WINDOW_ALLOW_HIGHDPI : create_window_flags),
                       "window");
 
+  // SDL2 starts text input on desktop platforms, which hands every key press
+  // to the system input method first: with a Chinese or Japanese IME selected,
+  // each shortcut letter opens a composition popup. Nothing here takes typed
+  // text, only key presses, so turn it off and let keys through as keys.
+  SDL_StopTextInput();
+
   SDL_RWops* embedded_icon = check_sdl(SDL_RWFromConstMem(VIDEO_COMPARE_ICON_BMP, VIDEO_COMPARE_ICON_BMP_LEN), "get pointer to icon");
   SDL_Surface* icon_surface = check_sdl(SDL_LoadBMP_RW(embedded_icon, 1), "load icon");
 
