@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     permissions:
       contents: read
 
@@ -25,7 +25,10 @@ jobs:
       - name: Setup MSYS2 (MINGW64)
         uses: msys2/setup-msys2@v2
         with:
+          # Release links the pinned Gyan/SDL MinGW import libs. UCRT64 is the
+          # integration-test toolchain and does not use that download layout.
           msystem: MINGW64
+          suppress-deprecation-warnings: msystem-mingw64
           release: true
           update: true
           install: >-
@@ -40,21 +43,27 @@ jobs:
 
       - name: Download FFmpeg
         shell: msys2 {0}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           ./download_and_extract_windows_deps.sh ffmpeg
 
       - name: Download SDL2
         shell: msys2 {0}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          ./download_and_extract_windows_deps.sh sdl2 release-2.32.10
+          ./download_and_extract_windows_deps.sh sdl2
 
       - name: Download SDL2_ttf
         shell: msys2 {0}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          ./download_and_extract_windows_deps.sh sdl2_ttf release-2.24.0
+          ./download_and_extract_windows_deps.sh sdl2_ttf
 
       - name: Build
         shell: msys2 {0}
@@ -73,6 +82,12 @@ jobs:
             while read dll; do
               cp -f "/mingw64/bin/$dll" .
             done
+
+      - name: Run unit tests
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          mingw32-make check
 
       - name: Verify build output
         shell: powershell
@@ -94,6 +109,18 @@ jobs:
           set -euxo pipefail
           strip video-compare.exe
 
+      - name: Verify FFmpeg source manifest
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          test -s licenses/FFMPEG-SOURCE.txt
+          grep -q '^Source and build information for the bundled FFmpeg libraries' licenses/FFMPEG-SOURCE.txt
+          grep -q '^Gyan release version:' licenses/FFMPEG-SOURCE.txt
+          grep -q '^FFmpeg upstream commit:' licenses/FFMPEG-SOURCE.txt
+          grep -q '^FFmpeg upstream archive:' licenses/FFMPEG-SOURCE.txt
+          grep -q '^Bundled shared-build archive:' licenses/FFMPEG-SOURCE.txt
+          grep -q '^Archive SHA-256:' licenses/FFMPEG-SOURCE.txt
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -102,12 +129,14 @@ jobs:
             video-compare.exe
             *.dll
             README.md
+            LICENSE.md
+            licenses/
           retention-days: 90
 
   release-windows:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build-windows
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
@@ -129,7 +158,8 @@ jobs:
           sudo apt-get install -y zip
 
           mkdir -p release
-          cp -f video-compare.exe README.md release/
+          cp -f video-compare.exe README.md LICENSE.md release/
+          cp -a licenses release/
           # Copy all DLLs (if any) from the Windows artifact bundle.
           shopt -s nullglob
           dlls=( *.dll )
@@ -144,7 +174,7 @@ jobs:
           ls -lh "$ZIP_NAME"
 
       - name: Generate artifact attestation (Windows zip)
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ env.ZIP_NAME }}
 
@@ -159,11 +189,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          syft dir:release -o spdx-json=sbom.spdx.json
+          syft dir:release \
+            --source-name "video-compare" \
+            --source-version "${GITHUB_REF_NAME}" \
+            -o spdx-json=sbom.spdx.json
           ls -lh sbom.spdx.json
 
       - name: Generate SBOM attestation (Windows zip)
-        uses: actions/attest-sbom@v2
+        uses: actions/attest@v4
         with:
           subject-path: ${{ env.ZIP_NAME }}
           sbom-path: sbom.spdx.json
@@ -194,7 +227,7 @@ jobs:
           gh release upload "$tag" -R "$repo" sbom.spdx.json --clobber=false
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
@@ -218,6 +251,9 @@ jobs:
 
       - name: Build
         run: make -j$(nproc)
+
+      - name: Run unit tests
+        run: make check
 
       - name: Verify build output
         run: |
@@ -243,10 +279,14 @@ jobs:
           path: |
             video-compare
             README.md
+            LICENSE.md
+            licenses/
           retention-days: 90
 
   build-macos:
-    runs-on: macos-latest
+    # This fork ships its macOS build for Apple Silicon (see README.zh-CN.md);
+    # upstream builds on macos-26-intel.
+    runs-on: macos-26
     permissions:
       contents: read
 
@@ -254,12 +294,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Remove untrusted Homebrew taps
+        run: |
+          brew untap aws/tap || true
+
       - name: Install dependencies via Homebrew
         run: |
           brew install ffmpeg sdl2 sdl2_ttf
 
       - name: Build
         run: make -j$(sysctl -n hw.ncpu)
+
+      - name: Run unit tests
+        run: make check
 
       - name: Verify build output
         run: |
@@ -307,8 +354,9 @@ jobs:
           # whoever downloads this will not have the same one, if they have Homebrew
           # at all.  Every bundled file was given an @executable_path id, so any
           # mention of the prefix at this point is a real reference.
+          prefix="$(brew --prefix)"
           for f in video-compare libs/*.dylib; do
-            if otool -L "$f" | grep -q /opt/homebrew; then
+            if otool -L "$f" | grep -q "$prefix/"; then
               echo "Still references Homebrew: $f"
               otool -L "$f"
               exit 1
@@ -340,4 +388,6 @@ jobs:
             video-compare
             libs
             README.md
+            LICENSE.md
+            licenses/
           retention-days: 90

@@ -175,7 +175,9 @@ video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
 | 预览中 `4` `6` `R` | 缩放到 1:1 物理像素 / 100%(一个源像素一个窗口点)/ 适应窗口;当前倍率显示在底部提示条 |
 | `F` | 保存两侧当前帧和屏幕内容为 PNG |
 | `Shift+L` `Shift+R` `Shift+B` | 交互式裁剪 左视频 / 右视频 / 两侧同区域 |
-| `Backspace` | 清除裁剪 |
+| `Ctrl+L` `Ctrl+R` | 清除 左视频 / 右视频 的裁剪 |
+| `Ctrl+Shift+L` `Ctrl+Shift+R` | 把左裁剪复制到所有右视频 / 把右裁剪复制到左视频 |
+| `Backspace` | 撤销上一次裁剪操作(v1.6 前是清除全部裁剪) |
 
 ### 其他
 
@@ -186,7 +188,8 @@ video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
 | `I` `T` | 切换 输入对齐缩放质量 / 纹理过滤方式 |
 | `Ctrl+C` / `Cmd+C` | 复制左视频当前时间戳 |
 | `Ctrl+V` / `Cmd+V` | 粘贴时间戳并跳转 |
-| `Shift+X` | 在终端打印内部状态(调试用) |
+| `W` | 窗口贴合当前画面并居中 |
+| `Shift+X` | 在终端打印内部状态(调试用),含两侧当前显示的帧号 |
 | `Shift+W` / `Ctrl+W` / `Ctrl+Shift+W` | 恢复保存的窗口尺寸 / 恢复启动尺寸 / 保存当前尺寸 |
 
 > 按住 `Ctrl` 或 `Shift` 可让相对定位、播放速度、缩放的调整幅度更小。
@@ -288,7 +291,7 @@ macOS 对非原生档位是**按逻辑分辨率的 2 倍渲染,再重采样到�
 而默认是**最近邻**过滤(`Bilinear filtering: false`),非整数倍的最近邻放大会产生不均匀像素块,
 **看起来很像编码瑕疵**。按 `4` 可消除。
 
-**`-d` 在 1x 档位(4K 原生)帮倒忙** —— 见已知问题表 `display.cpp:323`。那一档要 1:1 就别加 `-d`。
+**`-d` 在 1x 档位(4K 原生)帮倒忙** —— 见已知问题表 `src/display.cpp:341`。那一档要 1:1 就别加 `-d`。
 
 **1440p 档不要用于画质评估**,窗口和全屏都有 ×0.75 降采样。
 
@@ -297,6 +300,33 @@ macOS 对非原生档位是**按逻辑分辨率的 2 倍渲染,再重采样到�
 ---
 
 ## 版本历史
+
+### v1.6 — 2026-10-10
+
+**跟上上游**(pixop/video-compare 到 `20261004`,FFmpeg 9.0.2)。
+
+上游带来的,挑和这个 fork 有关的说:
+
+- **中文文件名不再显示成方块。** 上游内置了 CJK 回退字体(Sarasa Mono SC),也可以指定自己的字体文件。
+- **容器起始时间和视频流起始时间不一致的文件能对齐了**(上游 #151)。这正落在步进和同步的那块逻辑上。
+- **裁剪可以在两侧之间复制**(`Ctrl+Shift+L/R`)、**单侧清除**(`Ctrl+L/R`)、**撤销**(`Backspace`
+  —— 以前是清除全部)。
+- `W` 让窗口贴合画面,`-U` 调界面缩放,支持逐帧变化的宽高比,`--conversion-fit native` 按 1:1 摆放。
+- 单元测试和集成测试进了 CI。
+
+这边为此做的:
+
+- 上游把源码挪进 `src/`、第三方文件挪进 `third_party/`,tinyfiledialogs 跟着过去。`install.sh` 原先在仓库根目录
+  找 `video_compare.cpp`,不改的话会直接拒绝运行。
+- 上游把 seek 目标的计算抽成了单独的函数,只认一个对所有右视频通用的偏移。现在每个右视频把自己的步进偏移
+  单独带进去 —— 否则步进过的右视频一 seek 就回到没步进的位置。
+- v1.4 的 4K 修复重新落到上游重写过的转换器上:默认的 stretch 路径照旧多核转换;上游新加的、带黑边的
+  native 摆放保持单线程。目标帧不是 refcounted 时退回单线程,而不是让 swscale 把它的缓冲换掉。
+  复测:同样 1.8 秒,4K 59.94fps 多线程播到 1.6 秒,单线程只到 0.85 秒。
+- `Shift+X` 现在打印两侧当前显示的帧号(`frame_left=` `frame_right=`)。新增的 `right-step` 集成测试靠它断言:
+  分别步进两个右视频、全局 seek 后两边偏移都还在、`Ctrl+0` 清零;分开的文件和同一文件(单解码器模式)各跑一遍。
+  故意把 seek 里的步进偏移去掉,它会报错 —— 测试是真能抓到问题的。
+- macOS 构建仍是 arm64;上游把自己的换成了 Intel runner。
 
 ### v1.5 — 2026-08-06
 
@@ -373,13 +403,13 @@ macOS 对非原生档位是**按逻辑分辨率的 2 倍渲染,再重采样到�
 
 | 位置 | 问题 | 为什么还留着 |
 |---|---|---|
-| `video_compare.cpp:966`(`partial_seek_right_video`) | 局部 seek 可能在 demuxer 线程正处于 `av_read_frame` 时调用 `av_seek_frame`(同一个 `AVFormatContext`),属未定义行为。完整 seek 路径有握手机制,局部的没有。 | 需要慢速 I/O(网络流、高负载机器)才撞得上竞态窗口,无法按需复现。 |
-| `video_compare.cpp:1373`(play-resume 重对齐) | 恢复播放时的重对齐若取不到帧,失败被丢弃,画面静止且无任何提示。 | 需要 seek 目标越过文件末尾,而常规 seek 路径通常先一步拦下。复现不出来。 |
-| `video_compare.cpp:976`(`partial_seek_right_video`) | 时移乘数不为 1 时,局部 seek 的目标漏算了乘数自身的贡献。完整 seek 路径算了。 | 需要带乘数的 `--time-shift`,未测试。 |
-| `video_compare.cpp:1237`(前进步进) | 前进步进触发 seek 后遇到文件末尾,会报"reached end of video",但偏移其实已经变了。 | 纯提示问题。 |
-| `video_compare.cpp:1751`(`update_frame_timing`) | 步进仍会往帧时长均值里灌入不是帧时长的样本,`delta_pts_` 可能偏离真实值。 | v1.2 起偏移量已不依赖它。剩余影响只到同步容差和帧上标注的时长。 |
-| `display.cpp:323`(`Display::Display`) | 加 `-d` 时无条件把窗口尺寸除以 2,假定显示器是 2x 背景缓冲。在 1x 显示器上(如 macOS 的 4K 原生档)没有 2x 补回来,drawable 直接减半 —— `-d` 反而让画质更差。 | 上游代码。正确做法是建窗后按实测的 `drawable ÷ 窗口` 倍率再定,但要改动窗口初始化顺序,且无法在各种显示器配置下逐一验证。绕过:1x 档位下不加 `-d`。 |
-| `video_compare.cpp:1645`(`pop_frame`) | 步退后按 `Shift+D`,帧从该步退留存的缓冲里取。推断正确,实际使用也符合预期。 | 无日志证据 —— 调试打印无法把它和普通播放区分开。 |
+| `src/video_compare.cpp:1143`(`partial_seek_right_video`) | 局部 seek 可能在 demuxer 线程正处于 `av_read_frame` 时调用 `av_seek_frame`(同一个 `AVFormatContext`),属未定义行为。完整 seek 路径有握手机制,局部的没有。 | 需要慢速 I/O(网络流、高负载机器)才撞得上竞态窗口,无法按需复现。 |
+| `src/video_compare.cpp:1549`(play-resume 重对齐) | 恢复播放时的重对齐若取不到帧,失败被丢弃,画面静止且无任何提示。 | 需要 seek 目标越过文件末尾,而常规 seek 路径通常先一步拦下。复现不出来。 |
+| `src/video_compare.cpp:1153`(`partial_seek_right_video`) | 时移乘数不为 1 时,局部 seek 的目标漏算了乘数自身的贡献。完整 seek 路径算了。 | 需要带乘数的 `--time-shift`,未测试。 |
+| `src/video_compare.cpp:1413`(前进步进) | 前进步进触发 seek 后遇到文件末尾,会报"reached end of video",但偏移其实已经变了。 | 纯提示问题。 |
+| `src/video_compare.cpp:1898`(`update_frame_timing`) | 步进仍会往帧时长均值里灌入不是帧时长的样本,`delta_pts_` 可能偏离真实值。 | v1.2 起偏移量已不依赖它。剩余影响只到同步容差和帧上标注的时长。 |
+| `src/display.cpp:341`(`Display::Display`) | 加 `-d` 时无条件把窗口尺寸除以 2,假定显示器是 2x 背景缓冲。在 1x 显示器上(如 macOS 的 4K 原生档)没有 2x 补回来,drawable 直接减半 —— `-d` 反而让画质更差。 | 上游代码。正确做法是建窗后按实测的 `drawable ÷ 窗口` 倍率再定,但要改动窗口初始化顺序,且无法在各种显示器配置下逐一验证。绕过:1x 档位下不加 `-d`。 |
+| `src/video_compare.cpp:1792`(`pop_frame`) | 步退后按 `Shift+D`,帧从该步退留存的缓冲里取。推断正确,实际使用也符合预期。 | 无日志证据 —— 调试打印无法把它和普通播放区分开。 |
 
 ### 已知取舍(非 bug)
 

@@ -54,21 +54,14 @@ Download and extract the .zip-archive on your system, then run `video-compare.ex
 ## Screenshots
 
 Visual compare mode:
-![Visual compare mode](screenshot_1.jpg?raw=true)
+![Visual compare mode](docs/images/screenshot_1.jpg?raw=true)
 
 Subtraction mode (plus time-shift, 200% zoom, and magnification):
-![Subtraction mode"](screenshot_2.jpg?raw=true)
+![Subtraction mode"](docs/images/screenshot_2.jpg?raw=true)
 
 Vertically stacked mode:
-![Stacked mode"](screenshot_3.jpg?raw=true)
+![Stacked mode"](docs/images/screenshot_3.jpg?raw=true)
 
-## Credits
-
-`video-compare` was created by Jon Frydensbjerg (email: jon@pixop.com). The code is mainly based on
-the excellent video player GitHub project: https://github.com/pockethook/player
-
-Many thanks to the [FFmpeg](https://github.com/FFmpeg/FFmpeg), [SDL2](https://github.com/libsdl-org/SDL) and
-[stb](https://github.com/nothings/stb) authors.
 
 ## Usage
 
@@ -118,6 +111,12 @@ also supported):
 
     video-compare -m vstack video1.mp4 video2.mp4
 
+Perform simpler comparison of a video with itself using double underscore (`__`) as a placeholder. This
+enables tasks such as comparing the video with a time-shifted version of itself or testing various sets
+of filters, without the need to enter the same, potentially long path twice:
+
+    video-compare some/very/long/and/complicated/video/path.mp4 __
+
 Preprocess one or both inputs via a list of FFmpeg video filters specified on the command line
 (see [FFmpeg's video filters documentation](https://ffmpeg.org/ffmpeg-filters.html#Video-Filters)).
 The Swiss Army knife for cropping/padding (comparing videos with different aspect ratios),
@@ -155,12 +154,6 @@ Map a 500-nit peak light level HDR video for an sRGB SDR display, and adjust the
 to simulate the relative light level difference between the two videos on an actual HDR display:
 
     video-compare -T rel -L 500 hdr_video.mp4 sdr_video.mp4
-
-Perform simpler comparison of a video with itself using double underscore (`__`) as a placeholder. This
-enables tasks such as comparing the video with a time-shifted version of itself or testing various sets
-of filters, without the need to enter the same, potentially long path twice:
-
-    video-compare some/very/long/and/complicated/video/path.mp4 __
 
 Apply common filters to both videos and extend them with additional side-specific filters using the
 placeholder resolution functionality. This structure also works for demuxer, decoder, and hardware
@@ -233,15 +226,20 @@ see all supported options.
 - `T`: Toggle nearest-neighbor/bilinear video texture filtering
 - `Y`: Cycle through subtraction modes
 - `U`: Toggle luminance-only subtraction mode
+- `W`: Fit and center window to current video view
 - `X`: Show the current video frame and UI update rates (FPS)
 - `F1`: Toggle Histogram window
 - `F2`: Toggle Vectorscope window
 - `F3`: Toggle Waveform window
 - `Alt+Enter`: Toggle fullscreen
-- `Backspace`: Clear crop(s)
 - `Shift+L`: Crop left video interactively
+- `Ctrl+L`: Clear crop on left video
+- `Ctrl+Shift+L`: Copy left crop to all right videos
 - `Shift+R`: Crop right video interactively
+- `Ctrl+R`: Clear crop on right video
+- `Ctrl+Shift+R`: Copy right crop to left
 - `Shift+B`: Crop both videos to the same area
+- `Backspace`: Undo last crop operation
 - `Shift+D`: Decode and advance one frame
 - `Shift+A`: Seek to the previous frame (best with intra-frame formats)
 - `Shift+M`: Cycle display mode
@@ -299,7 +297,7 @@ Compile the source code via GNU Make:
 make
 ```
 
-The linked `video-compare` executable will be created in the source code directory. To perform a system wide installation:
+The linked `video-compare` executable will be created in the repository root. To perform a system wide installation:
 
 ```sh
 make install
@@ -353,3 +351,26 @@ For details, check out the [open GitHub issue thread](https://github.com/pixop/v
 ## Contributing
 
 We're always looking for ways to improve and expand the tool. Your feedback and contributions are appreciated.
+
+## Credits
+
+`video-compare` was created by Jon Frydensbjerg (email: jon@pixop.com). The code is mainly based on
+the excellent video player GitHub project: https://github.com/pockethook/player
+
+Many thanks to the [FFmpeg](https://github.com/FFmpeg/FFmpeg), [SDL2](https://github.com/libsdl-org/SDL) and
+[stb](https://github.com/nothings/stb) authors.
+
+## License
+
+`video-compare` is licensed under the [GNU General Public License version 2](LICENSE.md).
+Third-party software and the corresponding license texts are listed in
+[licenses/THIRD-PARTY-NOTICES.txt](licenses/THIRD-PARTY-NOTICES.txt).
+
+Binary redistributions of `video-compare`, including installers, application bundles, and GUI
+frontends that package the executable, must include `LICENSE.md` and the applicable third-party
+notices and license texts. The simplest approach is to preserve the complete `licenses/` directory
+unchanged.
+
+Source code for each official release is available from the corresponding GitHub release and
+repository tag. Redistributors of binary builds must also provide access to the complete
+corresponding source code as required by GPLv2.

@@ -14,7 +14,7 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\n\033[1;31mError: %s\033[0m\n' "$*" >&2; exit 1; }
 
-[ -f makefile ] && [ -f video_compare.cpp ] || die "Run this from the video-compare repository root."
+[ -f makefile ] && [ -f src/video_compare.cpp ] || die "Run this from the video-compare repository root."
 
 JOBS=$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
