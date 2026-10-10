@@ -781,7 +781,7 @@ void Display::print_verbose_info() {
     return embedded_font_display_name(active_embedded_font_);
   };
 
-  std::cout << "Main program version:  " << VersionInfo::version << std::endl;
+  std::cout << "Main program version:  " << VersionInfo::full() << std::endl;
   std::cout << "Video size:            " << video_width_ << "x" << video_height_ << std::endl;
   std::cout << "Video duration:        " << format_duration(duration_) << std::endl;
   std::cout << "Display mode:          " << mode_to_string(mode_) << std::endl;

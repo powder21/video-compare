@@ -671,7 +671,7 @@ int main(int argc, char** argv) {
     if (args["show-controls"]) {
       print_controls();
     } else if (args["version"]) {
-      std::cout << "video-compare " << VersionInfo::version << std::endl;
+      std::cout << "video-compare " << VersionInfo::full() << std::endl;
     } else if (args["find-filters"]) {
       find_matching_video_filters(args["find-filters"]);
     } else if (args["find-demuxers"]) {
@@ -684,7 +684,7 @@ int main(int argc, char** argv) {
       find_matching_hw_accels(args["find-hwaccels"]);
     } else if (args["help"] || args.count() == 0) {
       std::ostringstream usage;
-      usage << "video-compare " << VersionInfo::version << " " << VersionInfo::copyright << std::endl << std::endl;
+      usage << "video-compare " << VersionInfo::full() << " " << VersionInfo::copyright << std::endl << std::endl;
       usage << "Usage: " << argv[0] << " [OPTIONS]... LEFT RIGHT [RIGHT2 RIGHT3 ...]" << std::endl << std::endl;
       argagg::fmt_ostream fmt(std::cerr);
       fmt << usage.str() << argparser;
