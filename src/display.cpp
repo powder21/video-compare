@@ -2258,6 +2258,16 @@ void Display::refresh_selection_end_from_mouse() {
   }
 }
 
+// The renderer's logical size is the drawable size, so SDL reports mouse event
+// positions in drawable pixels, while everything here, SDL_GetMouseState()
+// included, works in window points.  The two differ by the backing scale
+// factor once high DPI is allowed (-d): left as they come, the split and every
+// selection land at twice the cursor's distance from the top left.
+void Display::set_mouse_position_from_event(const int x, const int y) {
+  mouse_x_ = static_cast<int>(std::lround(static_cast<float>(x) / drawable_to_window_width_factor_));
+  mouse_y_ = static_cast<int>(std::lround(static_cast<float>(y) / drawable_to_window_height_factor_));
+}
+
 void Display::on_view_transform_changed() {
   // Zoom, pan, and layout changes can move the selection endpoint without a
   // new mouse event. Sample the live cursor, then recompute from the cache.
@@ -3220,13 +3230,13 @@ void Display::handle_event(const SDL_Event& event) {
         break;
 
       case SDL_MOUSEMOTION:
-        mouse_x_ = event_.motion.x;
-        mouse_y_ = event_.motion.y;
+        set_mouse_position_from_event(event_.motion.x, event_.motion.y);
 
         if (event_.motion.state & SDL_BUTTON_RMASK) {
-          // Right-click drag: pan the preview
-          const float dx = static_cast<float>(event_.motion.xrel);
-          const float dy = static_cast<float>(event_.motion.yrel);
+          // Right-click drag: pan the preview.  The preview is laid out in window
+          // points, the motion comes in drawable pixels like the position does.
+          const float dx = static_cast<float>(event_.motion.xrel) / drawable_to_window_width_factor_;
+          const float dy = static_cast<float>(event_.motion.yrel) / drawable_to_window_height_factor_;
           preview_offset_ = preview_offset_ + Vector2D(dx, dy);
         }
         break;
@@ -3376,8 +3386,7 @@ void Display::handle_event(const SDL_Event& event) {
       }
       break;
     case SDL_MOUSEMOTION:
-      mouse_x_ = event_.motion.x;
-      mouse_y_ = event_.motion.y;
+      set_mouse_position_from_event(event_.motion.x, event_.motion.y);
 
       refresh_selection_end_from_mouse();
 
@@ -3396,8 +3405,7 @@ void Display::handle_event(const SDL_Event& event) {
       }
       break;
     case SDL_MOUSEBUTTONDOWN:
-      mouse_x_ = event_.button.x;
-      mouse_y_ = event_.button.y;
+      set_mouse_position_from_event(event_.button.x, event_.button.y);
       if (event_.button.button == SDL_BUTTON_LEFT && (save_selected_area_ || crop_mode_) && selection_state_ == SelectionState::None) {
         selection_state_ = SelectionState::Started;
         selection_start_ = window_to_video_position(mouse_x_, mouse_y_, compute_zoom_rect());
@@ -3417,8 +3425,7 @@ void Display::handle_event(const SDL_Event& event) {
       update_cursor();
       break;
     case SDL_MOUSEBUTTONUP:
-      mouse_x_ = event_.button.x;
-      mouse_y_ = event_.button.y;
+      set_mouse_position_from_event(event_.button.x, event_.button.y);
       if (event_.button.button == SDL_BUTTON_LEFT && selection_state_ == SelectionState::Started) {
         refresh_selection_end_from_mouse();
         selection_state_ = SelectionState::Completed;
