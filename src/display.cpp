@@ -859,6 +859,7 @@ void Display::rebuild_fonts() {
 
   small_font_ = new_small.release();
   big_font_ = new_large.release();
+  big_font_size_ = big_font_size;
 }
 
 bool Display::resolve_embedded_font_for_current_labels() {
@@ -2891,7 +2892,19 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   // render (optional) message
   if (!pending_message_.empty()) {
     message_shown_at_ = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
-    text_surface = TTF_RenderText_Blended(big_font_, pending_message_.c_str(), TEXT_COLOR);
+    // Messages can carry file paths, so they are UTF-8 like everything else
+    // shown. The UI font is chosen from the filename labels alone; when it lacks
+    // a glyph the message needs, say a Chinese save directory beside Latin
+    // filenames, borrow the embedded CJK font for this one message.
+    TTF_FontPtr message_fallback_font;
+    TTF_Font* message_font = big_font_;
+
+    if (font_selection_.mode == FontMode::Auto && active_embedded_font_ != EmbeddedFont::Sarasa && !font_supports_utf8_text(big_font_, pending_message_)) {
+      message_fallback_font.reset(open_ui_font_at_size(font_selection_, EmbeddedFont::Sarasa, big_font_size_, "large text"));
+      message_font = message_fallback_font.get();
+    }
+
+    text_surface = check_sdl(TTF_RenderUTF8_Blended(message_font, pending_message_.c_str(), TEXT_COLOR), "message surface");
 
     if (message_texture_ != nullptr) {
       SDL_DestroyTexture(message_texture_);

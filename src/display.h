@@ -347,6 +347,7 @@ class Display {
   SDL sdl_;
   TTF_Font* small_font_{nullptr};
   TTF_Font* big_font_{nullptr};
+  int big_font_size_{0};
   SDL_Cursor* normal_mode_cursor_;
   SDL_Cursor* pan_mode_cursor_;
   SDL_Cursor* selection_mode_cursor_;
