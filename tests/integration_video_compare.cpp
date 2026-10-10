@@ -1,4 +1,5 @@
 #define SDL_MAIN_HANDLED
+#include "string_utils.h"
 #include "video_compare.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -23,7 +24,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -73,6 +74,10 @@ const char* scenario_name(const Scenario scenario) {
       return "right-step-play";
     case Scenario::CropPreview:
       return "crop-preview";
+    case Scenario::MixedRateRights:
+      return "mixed-rate-rights";
+    case Scenario::RightStepEdges:
+      return "right-step-edges";
   }
   return "unknown";
 }
@@ -88,7 +93,7 @@ int watchdog_ticks_for(const Scenario scenario) {
   if (scenario == Scenario::CropCopy) {
     return 400;
   }
-  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep || scenario == Scenario::RightStepPlay) {
+  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep || scenario == Scenario::RightStepPlay || scenario == Scenario::RightStepEdges) {
     return 250;
   }
   return is_stress_scenario(scenario) ? 250 : 120;
@@ -971,6 +976,42 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     sleep_ms(700);
     push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
     sleep_ms(400);
+  } else if (scenario == Scenario::MixedRateRights) {
+    // 25 fps left, 25 fps active right, 30 fps second right. Each right is
+    // kept in step against its own frame rate, not the active one's. Paused,
+    // each Shift+D leaves the 30 fps side 6.7 ms further behind until the lag
+    // reaches its catch-up tolerance: 26.7 ms of its own, 32 ms borrowed from
+    // the active right. So the lag tops out at 26.7 ms, or at 33.3 ms with the
+    // wrong tolerance. Seven steps make sure a whole cycle comes round; Tab
+    // looks at right 2 without moving anything.
+    sleep_ms(1000);
+    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
+    sleep_ms(400);
+    dump_display_filters();  // 0: right 1 (25 fps)
+    for (int i = 0; i < 7; ++i) {
+      push_keydown(SDLK_d, SDL_SCANCODE_D, 0, KMOD_SHIFT);
+      sleep_ms(400);
+      push_keydown(SDLK_TAB, SDL_SCANCODE_TAB, 0);
+      sleep_ms(300);
+      dump_display_filters();  // 1..7: right 2 (30 fps)
+      push_keydown(SDLK_TAB, SDL_SCANCODE_TAB, 0);
+      sleep_ms(300);
+    }
+  } else if (scenario == Scenario::RightStepEdges) {
+    // The directions right-step-play leaves out: Ctrl+- and Alt++, the latter
+    // running into the end of the 100-frame fixture.
+    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
+    sleep_ms(400);
+    dump_display_filters();  // 0: level
+    push_keydown(SDLK_MINUS, SDL_SCANCODE_MINUS, 0, KMOD_CTRL);
+    sleep_ms(900);
+    dump_display_filters();  // 1: -10
+    push_keydown(SDLK_PLUS, SDL_SCANCODE_EQUALS, 0, KMOD_ALT);
+    sleep_ms(1500);
+    dump_display_filters();  // 2: +100 from there, stopped at the last frame
+    push_keydown(SDLK_0, SDL_SCANCODE_0, 0, KMOD_CTRL);
+    sleep_ms(700);
+    dump_display_filters();  // 3: level again
   }
 
   push_quit();
@@ -1012,7 +1053,8 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
   reset_helper_counters();
 
   VideoCompareConfig config = make_config(resolved);
-  if (scenario == Scenario::SyncMismatch || scenario == Scenario::MultiRightSync || scenario == Scenario::CropCopy || scenario == Scenario::InteractiveCrop || scenario == Scenario::CropPreview) {
+  if (scenario == Scenario::SyncMismatch || scenario == Scenario::MultiRightSync || scenario == Scenario::CropCopy || scenario == Scenario::InteractiveCrop || scenario == Scenario::CropPreview ||
+      scenario == Scenario::MixedRateRights) {
     // Auto fps= would otherwise lift 25 fps to 30 and hide the sync path.
     // crop-copy also wants a clean Shift+X chain so crop= is the only extra filter.
     config.disable_auto_filters = true;
@@ -1693,6 +1735,79 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
     } else {
       std::printf("PASS crop-preview selected exactly what was dragged, either way round, and 4/6/R/Esc kept it alive\n");
     }
+  } else if (scenario == Scenario::MixedRateRights) {
+    const std::vector<FilterDump> dumps = parse_display_filters(output);
+    std::string failure;
+    int l0 = 0, r0 = 0;
+    constexpr size_t kSteps = 7;
+    if (dumps.size() < kSteps + 1 || dumps[0].right_id != "1" || std::sscanf(dumps[0].frame_left.c_str(), "%d", &l0) != 1 || std::sscanf(dumps[0].frame_right.c_str(), "%d", &r0) != 1) {
+      failure = "expected a right 1 dump and seven right 2 dumps with frame numbers";
+    } else if (l0 < 25) {
+      failure = "playback barely moved (left frame " + std::to_string(l0) + ")";
+    } else if (r0 != l0) {
+      failure = "25 fps pair not level";
+    }
+    std::string phases;
+    double worst_lag_ms = 0.0;
+    for (size_t i = 1; failure.empty() && i <= kSteps; ++i) {
+      int l = 0, r = 0;
+      if (dumps[i].right_id != "2" || std::sscanf(dumps[i].frame_left.c_str(), "%d", &l) != 1 || std::sscanf(dumps[i].frame_right.c_str(), "%d", &r) != 1) {
+        failure = "dump " + std::to_string(i) + " is not a right 2 dump with frame numbers";
+        break;
+      }
+      // whole multiples of 1/150 s
+      const double lag_ms = (l / 25.0 - r / 30.0) * 1000.0;
+      worst_lag_ms = std::max(worst_lag_ms, std::fabs(lag_ms));
+      phases += string_sprintf(" %d/%d:%+.1f", l, r, lag_ms);
+      if (l != l0 + static_cast<int>(i)) {
+        failure = "Shift+D did not advance the left one frame at a time";
+      } else if (std::fabs(lag_ms) > 27.0) {
+        failure = string_sprintf("30 fps right 2 is %.1f ms off the left at left frame %d, past its own 26.7 ms tolerance", lag_ms, l);
+      }
+    }
+    if (failure.empty() && worst_lag_ms < 26.0) {
+      failure = "the walk never reached the 26.7 ms phase, so the tolerance went untested";
+    }
+    if (!failure.empty()) {
+      std::fprintf(stderr, "FAIL mixed-rate-rights: %s;%s\ncaptured stdout:\n%s\n", failure.c_str(), phases.c_str(), output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else {
+      std::printf("PASS mixed-rate-rights: 30 fps right 2 caught up at its own 26.7 ms tolerance (left/right:lag%s)\n", phases.c_str());
+    }
+  } else if (scenario == Scenario::RightStepEdges) {
+    const std::vector<FilterDump> dumps = parse_display_filters(output);
+    constexpr size_t kDumps = 4;
+    int left[kDumps] = {};
+    int right[kDumps] = {};
+    bool parsed = dumps.size() >= kDumps;
+    for (size_t i = 0; parsed && i < kDumps; ++i) {
+      parsed = std::sscanf(dumps[i].frame_left.c_str(), "%d", &left[i]) == 1 && std::sscanf(dumps[i].frame_right.c_str(), "%d", &right[i]) == 1;
+    }
+    // 4 s at 25 fps: frames 0..99
+    constexpr int kLastFrame = 99;
+    auto fail_edges = [&](const std::string& message) {
+      std::fprintf(stderr, "FAIL right-step-edges: %s\n", message.c_str());
+      for (size_t i = 0; i < dumps.size(); ++i) {
+        std::fprintf(stderr, "dump %zu: frame_left=%s frame_right=%s\n", i, dumps[i].frame_left.c_str(), dumps[i].frame_right.c_str());
+      }
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    };
+    if (!parsed) {
+      fail_edges("expected 4 Shift+X dumps with frame numbers");
+    } else if (right[0] != left[0]) {
+      fail_edges("sides were not level before stepping");
+    } else if (right[1] - left[1] != -10 || left[1] != left[0]) {
+      fail_edges("Ctrl+- did not step right 1 back by 10 frames alone");
+    } else if (right[2] != kLastFrame || left[2] != left[0]) {
+      fail_edges("Alt++ past the end did not stop right 1 at its last frame");
+    } else if (output.find("reached end") == std::string::npos) {
+      fail_edges("no reached-end notice");
+    } else if (right[3] != left[3] || left[3] != left[0]) {
+      fail_edges("Ctrl+0 did not bring right 1 back level");
+    } else {
+      std::printf("PASS right-step-edges: Ctrl+- -10, Alt++ stopped at the last frame with a reached-end notice, Ctrl+0 level\n");
+    }
   }
 
   if (exit_code == EXIT_SUCCESS) {
@@ -1721,6 +1836,8 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s right-step LEFT RIGHT0 RIGHT1\n", argv0);
   std::fprintf(stderr, "  %s right-step-play LEFT RIGHT0 RIGHT1\n", argv0);
   std::fprintf(stderr, "  %s crop-preview LEFT RIGHT\n", argv0);
+  std::fprintf(stderr, "  %s right-step-edges LEFT RIGHT0 RIGHT1\n", argv0);
+  std::fprintf(stderr, "  %s mixed-rate-rights LEFT_25 RIGHT0_25 RIGHT1_30\n", argv0);
 }
 
 }  // namespace
@@ -1856,6 +1973,20 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::CropPreview, files);
+    }
+    if (name == "mixed-rate-rights") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::MixedRateRights, files);
+    }
+    if (name == "right-step-edges") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::RightStepEdges, files);
     }
   } catch (const std::exception& exception) {
     std::fprintf(stderr, "FAIL %s\n", exception.what());

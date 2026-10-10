@@ -180,7 +180,13 @@ integration: $(integration_bin)
 	echo "Running $(integration_bin) right-step-play (single decoder)"; \
 	$$wrap ./$(integration_bin) right-step-play "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
 	echo "Running $(integration_bin) crop-preview"; \
-	$$wrap ./$(integration_bin) crop-preview "$$media/crop_left_320.mp4" "$$media/crop_right1_320.mp4"
+	$$wrap ./$(integration_bin) crop-preview "$$media/crop_left_320.mp4" "$$media/crop_right1_320.mp4"; \
+	echo "Running $(integration_bin) mixed-rate-rights"; \
+	$$wrap ./$(integration_bin) mixed-rate-rights "$$media/multi_sync_right0_25.mp4" "$$media/multi_sync_right1_25.mp4" "$$media/multi_sync_left_30.mp4"; \
+	echo "Running $(integration_bin) right-step-edges"; \
+	$$wrap ./$(integration_bin) right-step-edges "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
+	echo "Running $(integration_bin) right-step-edges (single decoder)"; \
+	$$wrap ./$(integration_bin) right-step-edges "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"
 
 .PHONY: stress
 stress: $(integration_bin)
