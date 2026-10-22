@@ -230,6 +230,8 @@ class Display {
   bool swap_left_right_{false};
   bool zoom_left_{false};
   bool zoom_right_{false};
+  // Q held: the reference video covers both sides until it is released.
+  bool show_ref_{false};
   bool show_left_{true};
   bool show_right_{true};
   bool show_hud_{true};
@@ -244,6 +246,7 @@ class Display {
   bool blink_saved_show_right_{true};
   AVRational left_frame_rate_{0, 1};
   AVRational right_frame_rate_{0, 1};
+  AVRational ref_frame_rate_{0, 1};
   // presented frames' numbers as the HUD shows them, for Shift+X
   std::string visual_left_frame_number_;
   std::string visual_right_frame_number_;
@@ -366,6 +369,7 @@ class Display {
     std::string file_stem;
   };
   std::array<SideUIState, 2> side_ui_;
+  SideUIState ref_ui_;
 
   int border_extension_;
   int double_border_extension_;
@@ -406,6 +410,7 @@ class Display {
   size_t active_right_index_{0};
   std::string left_file_name_;
   std::string right_file_name_;
+  std::string ref_file_name_;
   std::string save_dir_;
   std::string last_window_title_;
 
@@ -564,8 +569,13 @@ class Display {
   void reinitialize_video_dimensions(unsigned width, unsigned height);
 
   // Copy frame to display
-  bool possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable);
+  // ref_frame is the reference video's frame, drawn over both sides while Q is held.
+  bool possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable, const AVFrame* ref_frame = nullptr);
   void set_frame_rates(const AVRational& left_frame_rate, const AVRational& right_frame_rate);
+
+  // Name the reference video; without one, holding Q does nothing.
+  void set_ref_file_name(const std::string& ref_file_name);
+  void set_ref_frame_rate(const AVRational& ref_frame_rate);
 
   // Set a pending message to be displayed
   void set_pending_message(const std::string& message);

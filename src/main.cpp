@@ -613,6 +613,10 @@ int main(int argc, char** argv) {
          {"filters", {"-i", "--filters"}, "specify a comma-separated list of FFmpeg filters to be applied to both sides (e.g. scale=1920:-2,delogo=x=10:y=10:w=100:h=70)", 1},
          {"left-filters", {"-l", "--left-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the left video (e.g. format=gray,crop=iw:ih-240)", 1},
          {"right-filters", {"-r", "--right-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the right video (e.g. yadif,hqdn3d,pad=iw+320:ih:160:0)", 1},
+         {"ref",
+          {"--ref"},
+          "reference video, hidden from the Tab cycle and shown over both sides only while Q is held; it is set up like a right video (same options and time shift) and takes the same '::key=value' overrides (e.g. source.mp4 or 'src.y4m::filters=scale=1280:-2')",
+          1},
          {"find-filters", {"--find-filters"}, "find FFmpeg video filters that match the provided search term (e.g. 'scale', 'libvmaf' or 'dnn'; use \"\" to list all)", 1},
          {"conversion-size", {"--conversion-size"}, "shared conversion canvas size: 'max' (default, axis-wise maximum of filtered destinations) or an explicit [width]x[height] (e.g. 1920x1440)", 1},
          {"conversion-fit", {"--conversion-fit"}, "how filtered frames are placed on the conversion canvas: 'stretch' (default, scale to fill) or 'native' (1:1 centered samples with black padding)", 1},
@@ -1019,6 +1023,29 @@ int main(int argc, char** argv) {
         resolve_mutual_placeholders(left_file, right_video.file_name, "video file", true);
 
         config.right_videos.push_back(right_video);
+      }
+
+      if (args["ref"]) {
+        RightVideoSpec spec = parse_right_video_spec(static_cast<const std::string&>(args["ref"]));
+
+        InputVideo ref_video = right_template;
+        ref_video.file_name = spec.file_name;
+        ref_video.side = Side::Right(config.right_videos.size());
+        ref_video.side_description = "Ref";
+        ref_video.demuxer_options = nullptr;
+        av_dict_copy(&ref_video.demuxer_options, right_template.demuxer_options, 0);
+        ref_video.decoder_options = nullptr;
+        av_dict_copy(&ref_video.decoder_options, right_template.decoder_options, 0);
+        ref_video.hw_accel_options = nullptr;
+        av_dict_copy(&ref_video.hw_accel_options, right_template.hw_accel_options, 0);
+
+        apply_right_video_spec(ref_video, spec, right_template);
+
+        std::string left_file = config.left.file_name;
+        resolve_mutual_placeholders(left_file, ref_video.file_name, "video file", true);
+
+        config.ref_video = ref_video;
+        config.has_ref_video = true;
       }
 
       av_log_set_callback(sa_av_log_callback);

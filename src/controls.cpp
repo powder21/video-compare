@@ -26,6 +26,7 @@ static const std::vector<ControlSection> control_sections{
       {"S", "Swap left and right video"},
       {"O", "Toggle blink comparison: show one side at a time (arrows flip, 1/2 pick a side)"},
       {"Tab", "Cycle through right videos"},
+      {"Q", "Hold to show the reference video (--ref) over both sides"},
       {"1", "Toggle hide/show left video"},
       {"2", "Toggle hide/show right video"},
       {"3", "Toggle hide/show HUD"},

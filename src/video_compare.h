@@ -214,6 +214,9 @@ class VideoCompare {
   const TimeShiftConfig time_shift_;
   const int64_t time_shift_offset_av_time_;
 
+  // Side the reference video is decoded on, or NONE without one.
+  const Side ref_side_;
+
   std::map<Side, std::unique_ptr<Demuxer>> demuxers_;
   std::map<Side, std::unique_ptr<VideoDecoder>> video_decoders_;
   std::map<Side, std::unique_ptr<VideoFilterer>> video_filterers_;

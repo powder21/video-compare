@@ -175,6 +175,13 @@ apply to all right videos by default, but can be overridden per-video:
         output2.mp4::filters=__,scale=1920:-1 \
         output3.mp4::filters=::hwaccel=videotoolbox
 
+Add a reference video with `--ref` (typically the source). It is hidden from the `Tab` cycle and only shown,
+over both sides at the current zoom and pan, while `Q` is held; releasing `Q` returns to the left/right
+comparison. It is decoded and kept in sync like one more right video, takes the right videos' command-line
+settings (including `-t`), and accepts the same `::` overrides:
+
+    video-compare --ref source.y4m encode_a.mp4 encode_b.mp4
+
 The above features can be combined in any order, of course. Launch `video-compare` without any arguments to
 see all supported options.
 
@@ -204,6 +211,7 @@ see all supported options.
 - `R`: Global re-center and reset zoom to 100% (x1)
 - `S`: Swap left and right video
 - `Tab`: Cycle through right videos
+- `Q`: Hold to show the reference video (`--ref`) over both sides
 - `1`: Toggle hide/show left video
 - `2`: Toggle hide/show right video
 - `3`: Toggle hide/show HUD

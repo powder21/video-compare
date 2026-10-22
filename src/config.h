@@ -91,5 +91,10 @@ struct VideoCompareConfig {
   InputVideo left{LEFT, "Left"};
   std::vector<InputVideo> right_videos;
 
+  // Optional reference video, decoded alongside the right videos but left out
+  // of the Tab cycle; it is only shown while its key is held down.
+  bool has_ref_video{false};
+  InputVideo ref_video{RIGHT, "Ref"};
+
   ScopesConfig scopes;
 };

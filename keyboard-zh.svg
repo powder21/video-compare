@@ -74,8 +74,9 @@
 <rect x="14.0" y="124.0" width="71.0" height="46" rx="5" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
 <text x="49.5" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">Tab</text>
 <text x="49.5" y="159.0" font-size="9" fill="#475569" text-anchor="middle">切视频</text>
-<rect x="89.0" y="124.0" width="46.0" height="46" rx="5" fill="#fbfcfd" stroke="#e5e9ef" stroke-width="1"/>
-<text x="112.0" y="153.0" font-size="12" fill="#94a3b8" text-anchor="middle">Q</text>
+<rect x="89.0" y="124.0" width="46.0" height="46" rx="5" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="112.0" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">Q</text>
+<text x="112.0" y="159.0" font-size="9" fill="#475569" text-anchor="middle">按住看参照</text>
 <rect x="139.0" y="124.0" width="46.0" height="46" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
 <text x="162.0" y="143.0" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">W</text>
 <text x="162.0" y="159.0" font-size="9" fill="#475569" text-anchor="middle">贴合窗口</text>

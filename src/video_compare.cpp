@@ -102,17 +102,31 @@ static bool compare_av_dictionaries(AVDictionary* dict1, AVDictionary* dict2) {
   return true;
 }
 
+// The reference video runs through the same pipeline as the right videos, as one
+// more right side after the last of them; it is only kept out of the Tab cycle.
+static std::vector<const InputVideo*> all_right_inputs(const VideoCompareConfig& config) {
+  std::vector<const InputVideo*> inputs;
+  for (const auto& right_video : config.right_videos) {
+    inputs.push_back(&right_video);
+  }
+  if (config.has_ref_video) {
+    inputs.push_back(&config.ref_video);
+  }
+  return inputs;
+}
+
 static bool produces_same_decoded_video(const VideoCompareConfig& config) {
   if (config.right_videos.empty()) {
     return false;
   }
-  const auto matches_left_decode_source = [&](const InputVideo& right_video) {
-    return (config.left.file_name == right_video.file_name) && (config.left.demuxer == right_video.demuxer) && (config.left.decoder == right_video.decoder) && (config.left.hw_accel_spec == right_video.hw_accel_spec) &&
-           compare_av_dictionaries(config.left.demuxer_options, right_video.demuxer_options) && compare_av_dictionaries(config.left.decoder_options, right_video.decoder_options) &&
-           compare_av_dictionaries(config.left.hw_accel_options, right_video.hw_accel_options);
+  const auto matches_left_decode_source = [&](const InputVideo* right_video) {
+    return (config.left.file_name == right_video->file_name) && (config.left.demuxer == right_video->demuxer) && (config.left.decoder == right_video->decoder) && (config.left.hw_accel_spec == right_video->hw_accel_spec) &&
+           compare_av_dictionaries(config.left.demuxer_options, right_video->demuxer_options) && compare_av_dictionaries(config.left.decoder_options, right_video->decoder_options) &&
+           compare_av_dictionaries(config.left.hw_accel_options, right_video->hw_accel_options);
   };
 
-  return std::all_of(config.right_videos.begin(), config.right_videos.end(), matches_left_decode_source);
+  const auto inputs = all_right_inputs(config);
+  return std::all_of(inputs.begin(), inputs.end(), matches_left_decode_source);
 }
 
 static inline AVPixelFormat determine_pixel_format(const VideoCompareConfig& config) {
@@ -174,7 +188,8 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
       auto_loop_mode_(config.auto_loop_mode),
       frame_buffer_size_(config.frame_buffer_size),
       time_shift_(config.time_shift),
-      time_shift_offset_av_time_(playback_timing::time_ms_to_av_time(static_cast<double>(config.time_shift.offset_ms))) {
+      time_shift_offset_av_time_(playback_timing::time_ms_to_av_time(static_cast<double>(config.time_shift.offset_ms))),
+      ref_side_(config.has_ref_video ? Side::Right(config.right_videos.size()) : NONE) {
   auto install_processor = [&](auto& processor_map, const ReadyToSeek::ProcessorThread thread, const Side& side, auto processor) {
     processor_map[side] = std::move(processor);
     ready_to_seek_.init(thread, side);
@@ -191,13 +206,17 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
       video_decoders_, ReadyToSeek::ProcessorThread::Decoder, LEFT,
       std::make_unique<VideoDecoder>(LEFT, config.left.decoder, config.left.hw_accel_spec, demuxers_[LEFT]->video_codec_parameters(), config.left.peak_luminance_nits, config.left.hw_accel_options, config.left.decoder_options));
 
-  // Initialize all right video demuxers and decoders
-  for (size_t i = 0; i < config.right_videos.size(); ++i) {
-    const auto& right_config = config.right_videos[i];
+  const std::vector<const InputVideo*> right_inputs = all_right_inputs(config);
+
+  // Initialize all right video demuxers and decoders (the reference video last)
+  for (size_t i = 0; i < right_inputs.size(); ++i) {
+    const auto& right_config = *right_inputs[i];
     Side right_side = Side::Right(i);
 
-    // Store file name in the unified map
-    right_video_info_[right_side].file_name = right_config.file_name;
+    // Store file name in the unified map, which only holds the Tab-selectable videos
+    if (right_side != ref_side_) {
+      right_video_info_[right_side].file_name = right_config.file_name;
+    }
 
     install_processor(demuxers_, ReadyToSeek::ProcessorThread::Demultiplexer, right_side, std::make_unique<Demuxer>(right_side, right_config.demuxer, right_config.file_name, right_config.demuxer_options, right_config.decoder_options));
     install_processor(video_decoders_, ReadyToSeek::ProcessorThread::Decoder, right_side,
@@ -209,8 +228,8 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
   VideoFilterContext video_filter_context;
   video_filter_context.add(LEFT, demuxers_[LEFT].get(), video_decoders_[LEFT].get(), config.left.color_trc);
 
-  for (size_t i = 0; i < config.right_videos.size(); ++i) {
-    const auto& right_config = config.right_videos[i];
+  for (size_t i = 0; i < right_inputs.size(); ++i) {
+    const auto& right_config = *right_inputs[i];
     Side right_side = Side::Right(i);
     video_filter_context.add(right_side, demuxers_[right_side].get(), video_decoders_[right_side].get(), right_config.color_trc);
   }
@@ -221,8 +240,8 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
                                                     config.left.color_range, config.left.color_primaries, config.left.color_trc, &video_filter_context, config.disable_auto_filters));
 
   // For each right video, use VideoFilterContext for auto-filter determination
-  for (size_t i = 0; i < config.right_videos.size(); ++i) {
-    const auto& right_config = config.right_videos[i];
+  for (size_t i = 0; i < right_inputs.size(); ++i) {
+    const auto& right_config = *right_inputs[i];
     Side right_side = Side::Right(i);
 
     install_processor(video_filterers_, ReadyToSeek::ProcessorThread::Filterer, right_side,
@@ -297,6 +316,10 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
     Side right_side = Side::Right(i);
     dump_video_info(right_side, config.right_videos[i].file_name.c_str());
   }
+  if (ref_side_.is_valid()) {
+    std::cout << "Reference video (" << ref_side_.to_string() << ", hold Q to show it over both sides):" << std::endl;
+    dump_video_info(ref_side_, config.ref_video.file_name.c_str());
+  }
 
   // Initialize metadata overlay
   auto collect_metadata = [&](const Side& side) -> VideoMetadata {
@@ -360,6 +383,9 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
     display_->set_all_right_file_names(all_right_names);
   }
   display_->update_metadata(left_video_metadata_, right_video_info_[active_right].metadata);
+  if (ref_side_.is_valid()) {
+    display_->set_ref_file_name(config.ref_video.file_name);
+  }
 
   scope_manager_ = std::make_unique<ScopeManager>(config.scopes, config.use_10_bpc, config.display_number);
 
@@ -1078,6 +1104,12 @@ void VideoCompare::compare() {
     // Use active right video
     Side active_right = Side::Right(active_right_index_);
     SideState* right_ptr = &side_states.at(active_right);
+
+    // The reference video, shown over both sides while its key is held.
+    const SideState* ref_ptr = ref_side_.is_valid() ? &side_states.at(ref_side_) : nullptr;
+    if (ref_ptr != nullptr) {
+      display_->set_ref_frame_rate(ref_ptr->frame_rate_);
+    }
 
     int frame_offset = 0;
 
@@ -2065,7 +2097,14 @@ void VideoCompare::compare() {
               display_->set_all_right_frames(all_right_frames);
             }
 
-            if (display_->possibly_refresh(left_display_frame, right_display_frame, current_total_browsable)) {
+            // A partial seek of the reference never happens, but its buffer can still
+            // run short of the others' at the very start or end of the video.
+            const AVFrame* ref_display_frame = nullptr;
+            if (ref_ptr != nullptr && frame_offset < static_cast<int>(ref_ptr->frames_.size())) {
+              ref_display_frame = ref_ptr->frames_[frame_offset].get();
+            }
+
+            if (display_->possibly_refresh(left_display_frame, right_display_frame, current_total_browsable, ref_display_frame)) {
               // Energy-saving gating for scope windows
               const auto scope_sample = ScopeUpdateState::capture(left_display_frame, right_display_frame, scope_window_roi, display_->get_swap_left_right());
               const bool scope_state_changed = scope_update_state_.has_changed(scope_sample);

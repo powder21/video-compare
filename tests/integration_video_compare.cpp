@@ -24,7 +24,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -76,6 +76,8 @@ const char* scenario_name(const Scenario scenario) {
       return "crop-preview";
     case Scenario::MixedRateRights:
       return "mixed-rate-rights";
+    case Scenario::RefOverlay:
+      return "ref-overlay";
     case Scenario::RightStepEdges:
       return "right-step-edges";
   }
@@ -148,6 +150,23 @@ void push_keydown(const SDL_Keycode key, const SDL_Scancode scancode, const Uint
   event.key.keysym.mod = mod;
   if (SDL_PushEvent(&event) < 0) {
     std::fprintf(stderr, "SDL_PushEvent(KEYDOWN) failed: %s\n", SDL_GetError());
+  } else {
+    events_pushed.fetch_add(1);
+  }
+}
+
+void push_keyup(const SDL_Keycode key, const SDL_Scancode scancode, const Uint32 window_id) {
+  SDL_Event event{};
+  event.type = SDL_KEYUP;
+  event.key.type = SDL_KEYUP;
+  event.key.timestamp = SDL_GetTicks();
+  event.key.windowID = window_id;
+  event.key.state = SDL_RELEASED;
+  event.key.repeat = 0;
+  event.key.keysym.scancode = scancode;
+  event.key.keysym.sym = key;
+  if (SDL_PushEvent(&event) < 0) {
+    std::fprintf(stderr, "SDL_PushEvent(KEYUP) failed: %s\n", SDL_GetError());
   } else {
     events_pushed.fetch_add(1);
   }
@@ -662,6 +681,20 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     sleep_ms(200);
     push_keydown(SDLK_TAB, SDL_SCANCODE_TAB, 0);
     sleep_ms(200);
+  } else if (scenario == Scenario::RefOverlay) {
+    // Tab must not land on the reference, and holding Q over playing video
+    // must neither stall playback nor leave it stuck once released.
+    sleep_ms(600);
+    push_keydown(SDLK_TAB, SDL_SCANCODE_TAB, 0);
+    sleep_ms(200);
+    push_keydown(SDLK_q, SDL_SCANCODE_Q, 0);
+    sleep_ms(400);
+    push_copy_timestamp();
+    sleep_ms(200);
+    push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
+    sleep_ms(400);
+    push_copy_timestamp();
+    sleep_ms(200);
   } else if (scenario == Scenario::FrameNavigation) {
     // Pause isolates one-frame movement from continuous fetch. SPACE
     // toggles play_ to false; Shift+D still fetches via
@@ -1052,7 +1085,13 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
   prepare_dummy_software_sdl();
   reset_helper_counters();
 
-  VideoCompareConfig config = make_config(resolved);
+  VideoCompareConfig config = make_config(scenario == Scenario::RefOverlay ? std::vector<std::string>(resolved.begin(), resolved.end() - 1) : resolved);
+  if (scenario == Scenario::RefOverlay) {
+    config.has_ref_video = true;
+    config.ref_video.side = Side::Right(config.right_videos.size());
+    config.ref_video.side_description = "Ref";
+    config.ref_video.file_name = resolved.back();
+  }
   if (scenario == Scenario::SyncMismatch || scenario == Scenario::MultiRightSync || scenario == Scenario::CropCopy || scenario == Scenario::InteractiveCrop || scenario == Scenario::CropPreview ||
       scenario == Scenario::MixedRateRights) {
     // Auto fps= would otherwise lift 25 fps to 30 and hide the sync path.
@@ -1173,6 +1212,26 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       exit_code = EXIT_FAILURE;
     } else {
       std::printf("PASS sync-mismatch presented left PTS %.3f after mismatched-rate playback\n", times[0]);
+    }
+  } else if (scenario == Scenario::RefOverlay) {
+    const std::vector<double> times = copied_positions(output);
+    if (output.find("Reference video (") == std::string::npos) {
+      std::fprintf(stderr, "FAIL ref-overlay did not report the reference video\n");
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (output.find("Active right video: 1/1") == std::string::npos) {
+      std::fprintf(stderr, "FAIL ref-overlay Tab did not stay on 'Active right video: 1/1'\n");
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (times.size() < 2) {
+      std::fprintf(stderr, "FAIL ref-overlay expected 2 copied timestamps, got %zu\n", times.size());
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (times[1] - times[0] < 0.20) {
+      std::fprintf(stderr, "FAIL ref-overlay playback did not advance across Q release (%.3f -> %.3f)\n", times[0], times[1]);
+      exit_code = EXIT_FAILURE;
+    } else {
+      std::printf("PASS ref-overlay kept the reference out of Tab and played through Q hold/release (%.3f -> %.3f)\n", times[0], times[1]);
     }
   } else if (scenario == Scenario::MultiRightSync) {
     // Clipboard is left PTS only; Tab proves the second right is still live.
@@ -1838,6 +1897,7 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s crop-preview LEFT RIGHT\n", argv0);
   std::fprintf(stderr, "  %s right-step-edges LEFT RIGHT0 RIGHT1\n", argv0);
   std::fprintf(stderr, "  %s mixed-rate-rights LEFT_25 RIGHT0_25 RIGHT1_30\n", argv0);
+  std::fprintf(stderr, "  %s ref-overlay LEFT RIGHT REF\n", argv0);
 }
 
 }  // namespace
@@ -1987,6 +2047,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::RightStepEdges, files);
+    }
+    if (name == "ref-overlay") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::RefOverlay, files);
     }
   } catch (const std::exception& exception) {
     std::fprintf(stderr, "FAIL %s\n", exception.what());

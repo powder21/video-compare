@@ -72,6 +72,7 @@ Intel Mac、旧版 macOS、以及 Linux,请从源码编译。
 ```sh
 video-compare left.mp4 right.mp4              # 最常见的用法
 video-compare a.mp4 b.mp4 c.mp4               # 一个左视频对多个右视频,Tab 切换
+video-compare --ref src.mp4 a.mp4 b.mp4       # 额外带一个参照视频,按住 Q 时盖住左右两侧
 video-compare -w 1280x left.mp4 right.mp4     # 指定窗口宽度
 video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
 ```
@@ -114,8 +115,18 @@ video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
 | `Ctrl+0` | 清除当前右视频的偏移 |
 | `Tab` | 切换到下一个右视频 |
 | `Ctrl+Shift+1..0` | 直接切到第 1~10 个右视频 |
+| `Q`(按住) | 显示参照视频(`--ref`),松开回到左右对比 |
 
 > 步进只在**暂停**时可用。屏幕上没有"当前是哪个右视频"的提示,可用 `Shift+X` 在终端确认。
+
+### 参照视频(本 fork 新增)
+
+`--ref 文件` 再指定一个视频作为左右**共同的参照**(通常是源片)。它平时不出现,`Tab` 也轮不到它;
+**按住 `Q`** 时它临时盖住整个画面 —— 分割、上下、左右布局下都盖住两侧,缩放和平移保持不变 ——
+**松开**立刻回到原来的左右对比。按住期间差分模式暂时让位,HUD 上显示 `Ref: 文件名`。
+
+参照视频按"多一个右视频"来解码:跟随播放、跳转和同步,沿用右视频的命令行设置(包括 `-t` 时间偏移),
+也能用 `::` 单独覆盖,例如 `--ref 'src.y4m::filters=scale=1280:-2'`。逐帧步进(`+`/`-`)只作用于当前右视频,不会动参照。
 
 ### 视图
 

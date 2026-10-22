@@ -478,6 +478,9 @@ Display::~Display() {
   SDL_DestroyTexture(video_texture_nn_);
   SDL_DestroyTexture(side_ui_[LEFT.as_simple_index()].text_texture);
   SDL_DestroyTexture(side_ui_[RIGHT.as_simple_index()].text_texture);
+  if (ref_ui_.text_texture != nullptr) {
+    SDL_DestroyTexture(ref_ui_.text_texture);
+  }
 
   if (message_texture_ != nullptr) {
     SDL_DestroyTexture(message_texture_);
@@ -870,7 +873,10 @@ void Display::rebuild_fonts() {
 
 bool Display::resolve_embedded_font_for_current_labels() {
   const EmbeddedFont previous = active_embedded_font_;
-  const auto labels = hud_filename_labels(left_file_name_, right_file_name_, active_right_index_);
+  auto labels = hud_filename_labels(left_file_name_, right_file_name_, active_right_index_);
+  if (!ref_file_name_.empty()) {
+    labels.first += " " + ref_file_name_;
+  }
 
   if (font_selection_.mode == FontMode::Auto) {
     bool malformed = false;
@@ -932,6 +938,18 @@ void Display::rebuild_side_ui_textures() {
 
   rebuild_side(LEFT, left_file_name_);
   rebuild_side(RIGHT, format_right_file_label(left_file_name_, right_file_name_, active_right_index_ + 1));
+
+  if (ref_ui_.text_texture != nullptr) {
+    SDL_DestroyTexture(ref_ui_.text_texture);
+    ref_ui_.text_texture = nullptr;
+  }
+  if (!ref_file_name_.empty()) {
+    SDL_Surface* text_surface = render_text_with_fallback("Ref: " + ref_file_name_);
+    ref_ui_.text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
+    ref_ui_.text_width = text_surface->w;
+    ref_ui_.text_height = text_surface->h;
+    SDL_FreeSurface(text_surface);
+  }
 }
 
 void Display::rebuild_help_textures() {
@@ -2406,12 +2424,40 @@ void Display::set_frame_rates(const AVRational& left_frame_rate, const AVRationa
   right_frame_rate_ = right_frame_rate;
 }
 
-bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable) {
+void Display::set_ref_file_name(const std::string& ref_file_name) {
+  ref_file_name_ = ref_file_name;
+
+  const bool font_family_changed = (font_selection_.mode == FontMode::Auto) && resolve_embedded_font_for_current_labels();
+
+  if (font_family_changed) {
+    rebuild_font_dependent_ui();
+  } else {
+    rebuild_side_ui_textures();
+  }
+}
+
+void Display::set_ref_frame_rate(const AVRational& ref_frame_rate) {
+  ref_frame_rate_ = ref_frame_rate;
+}
+
+bool Display::possibly_refresh(const AVFrame* input_left_frame, const AVFrame* input_right_frame, const std::string& current_total_browsable, const AVFrame* ref_frame) {
   // If crop preview is active, render preview and skip normal video rendering
   if (crop_preview_mode_ == CropPreviewMode::Active) {
     render_crop_preview();
     return true;
   }
+
+  // While Q is held the reference video stands in for both sides, so it covers
+  // whatever the layout shows, split, stacked or one side only, at the same zoom
+  // and pan; letting go hands the view straight back to left and right.
+  const bool showing_ref = show_ref_ && ref_frame != nullptr && ref_ui_.text_texture != nullptr;
+  const AVFrame* left_frame = showing_ref ? ref_frame : input_left_frame;
+  const AVFrame* right_frame = showing_ref ? ref_frame : input_right_frame;
+  const AVRational shown_left_frame_rate = showing_ref ? ref_frame_rate_ : left_frame_rate_;
+  const AVRational shown_right_frame_rate = showing_ref ? ref_frame_rate_ : right_frame_rate_;
+  const bool subtraction_mode = subtraction_mode_ && !showing_ref;
+  const SideUIState& left_ui = showing_ref ? ref_ui_ : side_ui_[displayed_left_side_.as_simple_index()];
+  const SideUIState& right_ui = showing_ref ? ref_ui_ : side_ui_[displayed_right_side_.as_simple_index()];
 
   const std::string left_frame_key = FrameMetadata::require_key(left_frame);
   const std::string right_frame_key = FrameMetadata::require_key(right_frame);
@@ -2421,7 +2467,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
   // Callers pass visual-left/right after Swap. Recover the original left-input (seek master)
   // for Dynamic DAR; do not use visual-left.
-  const AVFrame* reference_frame = swap_left_right_ ? right_frame : left_frame;
+  const AVFrame* reference_frame = swap_left_right_ ? input_right_frame : input_left_frame;
 
   bool dynamic_layout_changed = false;
   AVRational reference_dar{};
@@ -2445,8 +2491,8 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
   visual_left_pre_canvas_size_ = {FrameMetadata::get_original_width(left_frame, 0), FrameMetadata::get_original_height(left_frame, 0)};
   visual_right_pre_canvas_size_ = {FrameMetadata::get_original_width(right_frame, 0), FrameMetadata::get_original_height(right_frame, 0)};
-  visual_left_frame_number_ = frame_number_text(left_frame, left_frame_rate_);
-  visual_right_frame_number_ = frame_number_text(right_frame, right_frame_rate_);
+  visual_left_frame_number_ = frame_number_text(left_frame, shown_left_frame_rate);
+  visual_right_frame_number_ = frame_number_text(right_frame, shown_right_frame_rate);
 
   std::array<uint8_t*, 3> planes_left{left_frame->data[0], left_frame->data[1], left_frame->data[2]};
   std::array<uint8_t*, 3> planes_right{right_frame->data[0], right_frame->data[1], right_frame->data[2]};
@@ -2626,7 +2672,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       const SDL_FRect screen_render_quad_right = video_rect_to_drawable_transform(video_to_zoom_space(tex_render_quad_right, zoom_rect));
 
       if (input_received_ || has_updated_right_frame) {
-        if (subtraction_mode_) {
+        if (subtraction_mode) {
           update_difference(planes_left, pitches_left, planes_right, pitches_right, start_right);
 
           if (use_10_bpc_) {
@@ -2704,7 +2750,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       // file name and current position of left video
       const std::string left_picture_type(1, av_get_picture_type_char(left_frame->pict_type));
       const std::string left_pos_str =
-          format_position(left_position, true) + " " + left_picture_type + format_position_difference(left_position, right_position) + (show_frame_numbers_ ? format_frame_number(left_frame, left_frame_rate_) : "");
+          format_position(left_position, true) + " " + left_picture_type + format_position_difference(left_position, right_position) + (show_frame_numbers_ ? format_frame_number(left_frame, shown_left_frame_rate) : "");
       text_surface = TTF_RenderText_Blended(small_font_, left_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* left_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       const int left_position_text_width = text_surface->w;
@@ -2714,12 +2760,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       if (mode_ == Mode::VStack) {
         render_text(line1_y_, line1_y_, left_position_text_texture, left_position_text_width, left_position_text_height, border_extension_, true);
         const int left_file_row_y = line1_y_ + left_position_text_height + double_border_extension_ + HUD_SCANLINE_GAP;
-        render_text(line1_y_, left_file_row_y, side_ui_[displayed_left_side_.as_simple_index()].text_texture, side_ui_[displayed_left_side_.as_simple_index()].text_width, side_ui_[displayed_left_side_.as_simple_index()].text_height,
+        render_text(line1_y_, left_file_row_y, left_ui.text_texture, left_ui.text_width, left_ui.text_height,
                     border_extension_, true);
       } else {
-        render_text(line1_y_, line1_y_, side_ui_[displayed_left_side_.as_simple_index()].text_texture, side_ui_[displayed_left_side_.as_simple_index()].text_width, side_ui_[displayed_left_side_.as_simple_index()].text_height,
+        render_text(line1_y_, line1_y_, left_ui.text_texture, left_ui.text_width, left_ui.text_height,
                     border_extension_, true);
-        const int left_position_row_y = line1_y_ + side_ui_[displayed_left_side_.as_simple_index()].text_height + double_border_extension_ + HUD_SCANLINE_GAP;
+        const int left_position_row_y = line1_y_ + left_ui.text_height + double_border_extension_ + HUD_SCANLINE_GAP;
         render_text(line1_y_, left_position_row_y, left_position_text_texture, left_position_text_width, left_position_text_height, border_extension_, true);
       }
 
@@ -2729,7 +2775,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       // file name and current position of right video
       const std::string right_picture_type(1, av_get_picture_type_char(right_frame->pict_type));
       const std::string right_pos_str =
-          format_position(right_position, true) + " " + right_picture_type + format_position_difference(right_position, left_position) + (show_frame_numbers_ ? format_frame_number(right_frame, right_frame_rate_) : "");
+          format_position(right_position, true) + " " + right_picture_type + format_position_difference(right_position, left_position) + (show_frame_numbers_ ? format_frame_number(right_frame, shown_right_frame_rate) : "");
       text_surface = TTF_RenderText_Blended(small_font_, right_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* right_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       int right_position_text_width = text_surface->w;
@@ -2744,16 +2790,16 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       if (mode_ == Mode::VStack) {
         text1_x = line1_y_;
         text2_x = line1_y_;
-        text2_y = drawable_height_ - line1_y_ - side_ui_[displayed_right_side_.as_simple_index()].text_height;
-        text1_y = text2_y - side_ui_[displayed_right_side_.as_simple_index()].text_height - double_border_extension_ - HUD_SCANLINE_GAP;
+        text2_y = drawable_height_ - line1_y_ - right_ui.text_height;
+        text1_y = text2_y - right_ui.text_height - double_border_extension_ - HUD_SCANLINE_GAP;
       } else {
-        text1_x = drawable_width_ - line1_y_ - side_ui_[displayed_right_side_.as_simple_index()].text_width;
+        text1_x = drawable_width_ - line1_y_ - right_ui.text_width;
         text1_y = line1_y_;
         text2_x = drawable_width_ - line1_y_ - right_position_text_width;
-        text2_y = line1_y_ + side_ui_[displayed_right_side_.as_simple_index()].text_height + double_border_extension_ + HUD_SCANLINE_GAP;
+        text2_y = line1_y_ + right_ui.text_height + double_border_extension_ + HUD_SCANLINE_GAP;
       }
 
-      render_text(text1_x, text1_y, side_ui_[displayed_right_side_.as_simple_index()].text_texture, side_ui_[displayed_right_side_.as_simple_index()].text_width, side_ui_[displayed_right_side_.as_simple_index()].text_height,
+      render_text(text1_x, text1_y, right_ui.text_texture, right_ui.text_width, right_ui.text_height,
                   border_extension_, false);
       render_text(text2_x, text2_y, right_position_text_texture, right_position_text_width, right_position_text_height, border_extension_, false);
 
@@ -2962,12 +3008,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   }
 
   if (save_image_frames_) {
-    save_image_frames(left_frame, right_frame);
+    save_image_frames(input_left_frame, input_right_frame);
     save_image_frames_ = false;
   }
 
   if (save_selected_area_ && selection_state_ == SelectionState::Completed) {
-    enter_crop_preview(left_frame);
+    enter_crop_preview(input_left_frame);
     selection_state_ = SelectionState::None;
     save_selected_area_ = false;
 
@@ -3966,6 +4012,13 @@ void Display::handle_event(const SDL_Event& event) {
           notify_user(string_sprintf("Subtraction mode set to '%s'", diff_mode_name.c_str()));
           break;
         }
+        case SDLK_q:
+          if (!ref_file_name_.empty()) {
+            show_ref_ = true;
+          } else if (event_.key.repeat == 0) {
+            notify_user("No reference video; supply one with --ref");
+          }
+          break;
         case SDLK_u:
           diff_luma_only_ = !diff_luma_only_;
           notify_user(string_sprintf("Subtraction luminance-only set to '%s'", diff_luma_only_ ? "ON" : "OFF"));
@@ -3982,6 +4035,9 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_c:
           zoom_right_ = false;
+          break;
+        case SDLK_q:
+          show_ref_ = false;
           break;
         case SDLK_x:
           show_fps_ = false;

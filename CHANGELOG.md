@@ -3,6 +3,15 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## v1.7 — 2026-10-22
+
+- **A reference video for both sides.** `--ref FILE` decodes one more video
+  alongside the right ones but leaves it out of the `Tab` cycle; holding `Q`
+  shows it over both sides at the current zoom and pan, and letting go returns
+  to the comparison. It follows playback, seeks and sync like a right video,
+  takes the right videos' options and `::` overrides, and is never stepped.
+  Covered by a new `ref-overlay` integration test.
+
 ## v1.6 — 2026-10-10
 
 Caught up with upstream (pixop/video-compare to `20261004`, FFmpeg 9.0.2).
