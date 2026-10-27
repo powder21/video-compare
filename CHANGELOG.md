@@ -3,7 +3,7 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
-## Unreleased
+## v1.7.1 — 2026-10-27
 
 - **The reference video can be stepped into line.** While `Q` is held, `+`/`-`
   (`Ctrl` for 10 frames, `Alt` for 100) and `Ctrl+0` act on the reference
