@@ -230,7 +230,10 @@ class Display {
   bool swap_left_right_{false};
   bool zoom_left_{false};
   bool zoom_right_{false};
-  // Q held: the reference video covers both sides until it is released.
+  // The reference video covers both sides while Q is held, or from one Shift+Q
+  // to the next; show_ref_ is the two together.
+  bool ref_held_{false};
+  bool ref_latched_{false};
   bool show_ref_{false};
   bool show_left_{true};
   bool show_right_{true};
@@ -250,6 +253,8 @@ class Display {
   // presented frames' numbers as the HUD shows them, for Shift+X
   std::string visual_left_frame_number_;
   std::string visual_right_frame_number_;
+  // the reference's frame at the same position, shown or not; empty without one
+  std::string visual_ref_frame_number_;
   bool start_in_fullscreen_{false};
   bool is_fullscreen_{false};
   bool subtraction_mode_{false};
@@ -259,6 +264,9 @@ class Display {
   int frame_navigation_delta_{0};
   int step_right_frames_{0};
   bool reset_right_offset_{false};
+  // +/- and Ctrl+0 pressed while Q is held go to the reference instead
+  int step_ref_frames_{0};
+  bool reset_ref_offset_{false};
   bool seek_from_start_{false};
   bool save_image_frames_{false};
   bool print_mouse_position_and_color_{false};
@@ -610,6 +618,8 @@ class Display {
   int get_frame_navigation_delta() const;
   int get_step_right_frames() const;
   bool get_reset_right_offset() const;
+  int get_step_ref_frames() const;
+  bool get_reset_ref_offset() const;
   float get_playback_speed_factor() const;
   bool get_tick_playback() const;
   bool get_possibly_tick_playback() const;

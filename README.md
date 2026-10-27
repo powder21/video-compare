@@ -182,6 +182,12 @@ settings (including `-t`), and accepts the same `::` overrides:
 
     video-compare --ref source.y4m encode_a.mp4 encode_b.mp4
 
+To align the reference, pause and hold `Q`: while it is held, `+`/`-` (with `Ctrl` for 10 frames, `Alt` for
+100) step the reference instead of the right video, and `Ctrl+0` clears its offset. Release `Q` and they act on
+the active right video again. The reference keeps an offset of its own through seeks and playback.
+`Shift+Q` does the same without holding a key: each press switches between the reference and left/right, and
+a plain `Q` press and release also returns to left/right.
+
 The above features can be combined in any order, of course. Launch `video-compare` without any arguments to
 see all supported options.
 
@@ -211,7 +217,8 @@ see all supported options.
 - `R`: Global re-center and reset zoom to 100% (x1)
 - `S`: Swap left and right video
 - `Tab`: Cycle through right videos
-- `Q`: Hold to show the reference video (`--ref`) over both sides
+- `Q`: Hold to show the reference video (`--ref`) over both sides; `+`/`-` and `Ctrl+0` then step the reference
+- `Shift+Q`: Toggle between the reference video and left/right without holding `Q`
 - `1`: Toggle hide/show left video
 - `2`: Toggle hide/show right video
 - `3`: Toggle hide/show HUD

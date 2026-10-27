@@ -3,6 +3,20 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## Unreleased
+
+- **The reference video can be stepped into line.** While `Q` is held, `+`/`-`
+  (`Ctrl` for 10 frames, `Alt` for 100) and `Ctrl+0` act on the reference
+  instead of the active right video, so it is on screen while it moves;
+  releasing `Q` hands them back. The reference keeps an offset of its own,
+  carried through seeks and resumed playback like any right video's.
+- **`Shift+Q` switches to the reference and stays there**, so it can be stepped
+  without holding a key: each press flips between the reference and left/right,
+  and the keys behave as with `Q` held. A plain `Q` press and release also
+  returns to left/right.
+- `Shift+X` adds `frame_ref=`, and a new `ref-step` integration test asserts on
+  it, with separate files and in single-decoder mode, Shift+Q included.
+
 ## v1.7 — 2026-10-22
 
 - **A reference video for both sides.** `--ref FILE` decodes one more video

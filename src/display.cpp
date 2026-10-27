@@ -2493,6 +2493,7 @@ bool Display::possibly_refresh(const AVFrame* input_left_frame, const AVFrame* i
   visual_right_pre_canvas_size_ = {FrameMetadata::get_original_width(right_frame, 0), FrameMetadata::get_original_height(right_frame, 0)};
   visual_left_frame_number_ = frame_number_text(left_frame, shown_left_frame_rate);
   visual_right_frame_number_ = frame_number_text(right_frame, shown_right_frame_rate);
+  visual_ref_frame_number_ = (ref_frame != nullptr) ? frame_number_text(ref_frame, ref_frame_rate_) : std::string();
 
   std::array<uint8_t*, 3> planes_left{left_frame->data[0], left_frame->data[1], left_frame->data[2]};
   std::array<uint8_t*, 3> planes_right{right_frame->data[0], right_frame->data[1], right_frame->data[2]};
@@ -3252,6 +3253,8 @@ void Display::begin_input_frame() {
   frame_navigation_delta_ = 0;
   step_right_frames_ = 0;
   reset_right_offset_ = false;
+  step_ref_frames_ = 0;
+  reset_ref_offset_ = false;
   tick_playback_ = false;
   possibly_tick_playback_ = false;
   toggle_scope_window_requested_.fill(false);
@@ -3689,7 +3692,7 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_0:
         case SDLK_KP_0:
           if (is_ctrl_down) {
-            reset_right_offset_ = true;
+            (show_ref_ ? reset_ref_offset_ : reset_right_offset_) = true;
           } else {
             subtraction_mode_ = !subtraction_mode_;
           }
@@ -3947,6 +3950,9 @@ void Display::handle_event(const SDL_Event& event) {
             }
             if (!visual_left_frame_number_.empty()) {
               message += " frame_left=" + visual_left_frame_number_ + " frame_right=" + visual_right_frame_number_;
+              if (!visual_ref_frame_number_.empty()) {
+                message += " frame_ref=" + visual_ref_frame_number_;
+              }
             }
             video_filter_state::append_display_state_filters(message, left_metadata_.get(MetadataProperties::FILTERS, "copy"), right_metadata_.get(MetadataProperties::FILTERS, "copy"));
             notify_user(message);
@@ -3956,25 +3962,30 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_PLUS:
         case SDLK_KP_PLUS:
-        case SDLK_EQUALS:  // for tenkeyless keyboards
+        case SDLK_EQUALS: {  // for tenkeyless keyboards
+          // Q held: the reference is on screen, so it is the one stepped.
+          int& step_frames = show_ref_ ? step_ref_frames_ : step_right_frames_;
           if (is_alt_down) {
-            step_right_frames_ += 100;
+            step_frames += 100;
           } else if (is_ctrl_down) {
-            step_right_frames_ += 10;
+            step_frames += 10;
           } else {
-            step_right_frames_++;
+            step_frames++;
           }
           break;
+        }
         case SDLK_MINUS:
-        case SDLK_KP_MINUS:
+        case SDLK_KP_MINUS: {
+          int& step_frames = show_ref_ ? step_ref_frames_ : step_right_frames_;
           if (is_alt_down) {
-            step_right_frames_ -= 100;
+            step_frames -= 100;
           } else if (is_ctrl_down) {
-            step_right_frames_ -= 10;
+            step_frames -= 10;
           } else {
-            step_right_frames_--;
+            step_frames--;
           }
           break;
+        }
         case SDLK_y: {
           // Cycle through subtraction modes
           const bool forward = !is_shift_down;
@@ -4013,11 +4024,21 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         }
         case SDLK_q:
-          if (!ref_file_name_.empty()) {
-            show_ref_ = true;
-          } else if (event_.key.repeat == 0) {
-            notify_user("No reference video; supply one with --ref");
+          if (ref_file_name_.empty()) {
+            if (event_.key.repeat == 0) {
+              notify_user("No reference video; supply one with --ref");
+            }
+          } else if (is_shift_down) {
+            // Shift+Q flips between the reference and left/right and stays put,
+            // for stepping the reference without holding a key down.
+            if (event_.key.repeat == 0) {
+              ref_latched_ = !ref_latched_;
+              notify_user(ref_latched_ ? "Reference shown (Shift+Q or Q returns to left/right)" : "Back to left/right");
+            }
+          } else {
+            ref_held_ = true;
           }
+          show_ref_ = ref_held_ || ref_latched_;
           break;
         case SDLK_u:
           diff_luma_only_ = !diff_luma_only_;
@@ -4037,7 +4058,13 @@ void Display::handle_event(const SDL_Event& event) {
           zoom_right_ = false;
           break;
         case SDLK_q:
-          show_ref_ = false;
+          // Letting go of a plain Q always returns to left/right, a Shift+Q
+          // latch included; the release that ends a Shift+Q press keeps it.
+          if (ref_held_) {
+            ref_held_ = false;
+            ref_latched_ = false;
+          }
+          show_ref_ = ref_held_ || ref_latched_;
           break;
         case SDLK_x:
           show_fps_ = false;
@@ -4112,6 +4139,14 @@ int Display::get_step_right_frames() const {
 
 bool Display::get_reset_right_offset() const {
   return reset_right_offset_;
+}
+
+int Display::get_step_ref_frames() const {
+  return step_ref_frames_;
+}
+
+bool Display::get_reset_ref_offset() const {
+  return reset_ref_offset_;
 }
 
 float Display::get_playback_speed_factor() const {

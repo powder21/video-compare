@@ -24,7 +24,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay, RefStep };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -78,6 +78,8 @@ const char* scenario_name(const Scenario scenario) {
       return "mixed-rate-rights";
     case Scenario::RefOverlay:
       return "ref-overlay";
+    case Scenario::RefStep:
+      return "ref-step";
     case Scenario::RightStepEdges:
       return "right-step-edges";
   }
@@ -95,7 +97,7 @@ int watchdog_ticks_for(const Scenario scenario) {
   if (scenario == Scenario::CropCopy) {
     return 400;
   }
-  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep || scenario == Scenario::RightStepPlay || scenario == Scenario::RightStepEdges) {
+  if (scenario == Scenario::InteractiveCrop || scenario == Scenario::RightStep || scenario == Scenario::RightStepPlay || scenario == Scenario::RightStepEdges || scenario == Scenario::RefStep) {
     return 250;
   }
   return is_stress_scenario(scenario) ? 250 : 120;
@@ -347,6 +349,7 @@ struct FilterDump {
   std::string ref_dar;
   std::string frame_left;
   std::string frame_right;
+  std::string frame_ref;
 };
 
 std::vector<FilterDump> parse_display_filters(const std::string& output) {
@@ -370,6 +373,7 @@ std::vector<FilterDump> parse_display_filters(const std::string& output) {
     dump.ref_dar = extract_unquoted_field(line, "ref_dar");
     dump.frame_left = extract_unquoted_field(line, "frame_left");
     dump.frame_right = extract_unquoted_field(line, "frame_right");
+    dump.frame_ref = extract_unquoted_field(line, "frame_ref");
     dumps.push_back(dump);
   }
   return dumps;
@@ -959,6 +963,63 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     sleep_ms(300);
     step(SDLK_0, SDL_SCANCODE_0, KMOD_CTRL);
     dump_display_filters();  // 7: right 2, reset
+  } else if (scenario == Scenario::RefStep) {
+    // Paused throughout.  +/- and Ctrl+0 pressed while Q is held step the
+    // reference and leave the right alone; released, they go back to the right.
+    // Every dump is taken with Q up, so frame_left/right are left and right.
+    auto key = [](const SDL_Keycode code, const SDL_Scancode scancode, const SDL_Keymod mod = KMOD_NONE) {
+      push_keydown(code, scancode, 0, mod);
+      sleep_ms(500);
+    };
+    auto hold_ref = []() {
+      push_keydown(SDLK_q, SDL_SCANCODE_Q, 0);
+      sleep_ms(200);
+    };
+    auto release_ref = []() {
+      push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
+      sleep_ms(300);
+    };
+    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
+    sleep_ms(400);
+    dump_display_filters();  // 0: all level
+    hold_ref();
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS);
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
+    release_ref();
+    dump_display_filters();  // 1: ref +11
+    hold_ref();
+    key(SDLK_MINUS, SDL_SCANCODE_MINUS);
+    release_ref();
+    dump_display_filters();  // 2: ref +10
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS);
+    dump_display_filters();  // 3: right +1, ref still +10
+    push_keydown(SDLK_RIGHT, SDL_SCANCODE_RIGHT, 0);
+    sleep_ms(800);
+    dump_display_filters();  // 4: both offsets kept through a global seek
+    hold_ref();
+    key(SDLK_0, SDL_SCANCODE_0, KMOD_CTRL);
+    release_ref();
+    dump_display_filters();  // 5: ref reset, right still +1
+    key(SDLK_0, SDL_SCANCODE_0, KMOD_CTRL);
+    dump_display_filters();  // 6: right reset
+    // Shift+Q latches the reference on, Q released or not.  Its own release
+    // must not drop the latch; a plain Q press and release does.
+    auto toggle_ref = []() {
+      push_keydown(SDLK_q, SDL_SCANCODE_Q, 0, KMOD_SHIFT);
+      sleep_ms(100);
+      push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
+      sleep_ms(200);
+    };
+    toggle_ref();
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS);
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS);
+    toggle_ref();
+    dump_display_filters();  // 7: ref +2 through the latch
+    toggle_ref();
+    hold_ref();
+    release_ref();
+    key(SDLK_PLUS, SDL_SCANCODE_EQUALS);
+    dump_display_filters();  // 8: Q released the latch, so + went to the right
   } else if (scenario == Scenario::RightStepPlay) {
     // The larger steps, the start-of-file clamp, and what becomes of the
     // offsets once playback resumes and a seek lands mid-play.
@@ -1085,8 +1146,9 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
   prepare_dummy_software_sdl();
   reset_helper_counters();
 
-  VideoCompareConfig config = make_config(scenario == Scenario::RefOverlay ? std::vector<std::string>(resolved.begin(), resolved.end() - 1) : resolved);
-  if (scenario == Scenario::RefOverlay) {
+  const bool with_ref = scenario == Scenario::RefOverlay || scenario == Scenario::RefStep;
+  VideoCompareConfig config = make_config(with_ref ? std::vector<std::string>(resolved.begin(), resolved.end() - 1) : resolved);
+  if (with_ref) {
     config.has_ref_video = true;
     config.ref_video.side = Side::Right(config.right_videos.size());
     config.ref_video.side_description = "Ref";
@@ -1232,6 +1294,58 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       exit_code = EXIT_FAILURE;
     } else {
       std::printf("PASS ref-overlay kept the reference out of Tab and played through Q hold/release (%.3f -> %.3f)\n", times[0], times[1]);
+    }
+  } else if (scenario == Scenario::RefStep) {
+    const std::vector<FilterDump> dumps = parse_display_filters(output);
+    struct Expected {
+      const char* what;
+      int right_offset;  // frame_right - frame_left
+      int ref_offset;    // frame_ref - frame_left
+    };
+    const Expected expected[] = {{"level before stepping", 0, 0},        {"ref after Q held + and Ctrl++", 0, 11}, {"ref after Q held -", 0, 10}, {"right after + with Q up", 1, 10},
+                                 {"both after a global seek", 1, 10}, {"ref after Q held Ctrl+0", 1, 0},       {"right after Ctrl+0", 0, 0},
+                                 {"ref after ++ inside a Shift+Q latch", 0, 2}, {"right after Q ended the latch", 1, 2}};
+    constexpr size_t kExpectedCount = sizeof(expected) / sizeof(expected[0]);
+
+    auto fail_step = [&](const std::string& message) {
+      std::fprintf(stderr, "FAIL ref-step: %s\n", message.c_str());
+      for (size_t i = 0; i < dumps.size(); ++i) {
+        std::fprintf(stderr, "dump %zu: frame_left=%s frame_right=%s frame_ref=%s\n", i, dumps[i].frame_left.c_str(), dumps[i].frame_right.c_str(), dumps[i].frame_ref.c_str());
+      }
+      std::fprintf(stderr, "captured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    };
+
+    if (dumps.size() < kExpectedCount) {
+      fail_step("expected " + std::to_string(kExpectedCount) + " Shift+X dumps, got " + std::to_string(dumps.size()));
+    } else {
+      int left_before_seek = -1;
+      for (size_t i = 0; i < kExpectedCount && exit_code == EXIT_SUCCESS; ++i) {
+        int left = 0;
+        int right = 0;
+        int ref = 0;
+        if (std::sscanf(dumps[i].frame_left.c_str(), "%d", &left) != 1 || std::sscanf(dumps[i].frame_right.c_str(), "%d", &right) != 1 || std::sscanf(dumps[i].frame_ref.c_str(), "%d", &ref) != 1) {
+          fail_step(std::string("no frame numbers for ") + expected[i].what);
+        } else if (right - left != expected[i].right_offset) {
+          fail_step(std::string(expected[i].what) + ": expected right offset " + std::to_string(expected[i].right_offset) + ", got " + std::to_string(right - left));
+        } else if (ref - left != expected[i].ref_offset) {
+          fail_step(std::string(expected[i].what) + ": expected ref offset " + std::to_string(expected[i].ref_offset) + ", got " + std::to_string(ref - left));
+        } else if (i < 4) {
+          // stepping either video must never move the left
+          if (left_before_seek >= 0 && left != left_before_seek) {
+            fail_step(std::string("left moved while stepping (") + expected[i].what + ")");
+          }
+          left_before_seek = left;
+        } else if (i == 4 && left <= left_before_seek) {
+          fail_step("the global seek did not move the left forward");
+        }
+      }
+      if (exit_code == EXIT_SUCCESS && output.find("Ref: +11 frames") == std::string::npos) {
+        fail_step("no 'Ref: +11 frames' notice");
+      }
+      if (exit_code == EXIT_SUCCESS) {
+        std::printf("PASS ref-step: Q held or a Shift+Q latch routes +/-, Ctrl++ and Ctrl+0 to the reference, the right keeps its own offset, both survive a seek\n");
+      }
     }
   } else if (scenario == Scenario::MultiRightSync) {
     // Clipboard is left PTS only; Tab proves the second right is still live.
@@ -1898,6 +2012,7 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s right-step-edges LEFT RIGHT0 RIGHT1\n", argv0);
   std::fprintf(stderr, "  %s mixed-rate-rights LEFT_25 RIGHT0_25 RIGHT1_30\n", argv0);
   std::fprintf(stderr, "  %s ref-overlay LEFT RIGHT REF\n", argv0);
+  std::fprintf(stderr, "  %s ref-step LEFT RIGHT REF\n", argv0);
 }
 
 }  // namespace
@@ -2054,6 +2169,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::RefOverlay, files);
+    }
+    if (name == "ref-step") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::RefStep, files);
     }
   } catch (const std::exception& exception) {
     std::fprintf(stderr, "FAIL %s\n", exception.what());

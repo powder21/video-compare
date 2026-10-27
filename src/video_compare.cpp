@@ -1363,196 +1363,212 @@ void VideoCompare::compare() {
 
       bool skip_update = false;
 
-      // --- Per-right-video forward stepping (+ key) ---
-      if (step_right_frames > 0 && !display_->get_play()) {
-        int frames_stepped = 0;
+      // Step (+/-) or re-level (Ctrl+0) one video against the left: the active
+      // right video normally, the reference while Q is held.  Each keeps its
+      // own offset, so stepping one never moves the other.
+      auto step_video = [&](const Side& step_side, const int step_frames, const bool reset_offset) {
+        SideState* const target = &side_states.at(step_side);
+        const size_t step_index = step_side.right_index();
+        const std::string name = (step_side == ref_side_) ? std::string("Ref") : string_sprintf("Right #%zu", step_index + 1);
+        // this video's own frame duration, so the reference steps by its own frames
+        const int64_t target_delta = playback_timing::normalized_delta(target->delta_pts_);
 
-        for (int i = 0; i < step_right_frames; i++) {
-          AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
+        // --- forward stepping (+ key) ---
+        if (step_frames > 0 && !display_->get_play()) {
+          int frames_stepped = 0;
 
-          if (!right_ptr->stepped_back_frames_.empty()) {
-            // Undo an earlier backward step from its set-aside frames.  The pipeline
-            // still sits where that step left it, so its head is not the frame that
-            // follows the displayed one and must not be used here.
-            stepped_frame = std::move(right_ptr->stepped_back_frames_.front());
-            right_ptr->stepped_back_frames_.pop_front();
-          } else if (single_decoder_mode_ && !converted_frame_queues_[active_right]->try_pop(stepped_frame)) {
-            // In single decoder mode this video has no pipeline of its own: its frames
-            // arrive through the left decoder's fan-out, which stalls while paused once
-            // the left pipeline fills up.  So once the frames already in flight have
-            // been consumed the queue never refills and the pop below would block
-            // forever; give the video its own pipeline instead.  Seeking is deferred
-            // to here rather than done up front because it re-decodes from the
-            // preceding keyframe, and partial_seek_right_video clears the mode, so the
-            // cost is paid at most once and only if stepping runs past the buffer.
-            const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
-            const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-            partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
-          }
+          for (int i = 0; i < step_frames; i++) {
+            AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
 
-          if (stepped_frame != nullptr || converted_frame_queues_[active_right]->pop(stepped_frame)) {
-            right_ptr->decoded_picture_number_++;
-
-            // Move the offset by the distance between the frame being replaced and
-            // the one replacing it, which is exact, rather than by delta_pts_: that
-            // is a rolling average a single irregular interval can skew, and since
-            // the offset is frozen when the step is taken it would keep the error.
-            const int64_t replaced_pts = right_ptr->frames_.empty() ? stepped_frame->pts : right_ptr->frames_[0]->pts;
-            apply_right_step_offset(active_right_index_, 1, stepped_frame->pts - replaced_pts);
-            frames_stepped++;
-
-            // Store every stepped frame, not just the one the loop ends on: the
-            // browse buffer and the backward fast path both take adjacent entries
-            // to be exactly one frame apart.
-            if (right_ptr->frames_.size() >= frame_buffer_size_) {
-              right_ptr->frames_.pop_back();
+            if (!target->stepped_back_frames_.empty()) {
+              // Undo an earlier backward step from its set-aside frames.  The pipeline
+              // still sits where that step left it, so its head is not the frame that
+              // follows the displayed one and must not be used here.
+              stepped_frame = std::move(target->stepped_back_frames_.front());
+              target->stepped_back_frames_.pop_front();
+            } else if (single_decoder_mode_ && !converted_frame_queues_[step_side]->try_pop(stepped_frame)) {
+              // In single decoder mode this video has no pipeline of its own: its frames
+              // arrive through the left decoder's fan-out, which stalls while paused once
+              // the left pipeline fills up.  So once the frames already in flight have
+              // been consumed the queue never refills and the pop below would block
+              // forever; give the video its own pipeline instead.  Seeking is deferred
+              // to here rather than done up front because it re-decodes from the
+              // preceding keyframe, and partial_seek_right_video clears the mode, so the
+              // cost is paid at most once and only if stepping runs past the buffer.
+              const int64_t effective_shift = compute_static_right_time_shift(step_index);
+              const float right_target_position = left.pts_ * AV_TIME_TO_SEC + target->start_time_ + effective_shift * AV_TIME_TO_SEC;
+              partial_seek_right_video(step_side, *target, effective_shift, right_target_position);
             }
-            right_ptr->frames_.push_front(std::move(stepped_frame));
-          } else {
-            // Queue empty — cannot step further forward
-            break;
-          }
-        }
 
-        if (frames_stepped > 0 && !right_ptr->frames_.empty()) {
-          // Compute effective time shift for the active right video
-          const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
-          right_ptr->effective_time_shift_ = static_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frames_[0]->pts, true);
+            if (stepped_frame != nullptr || converted_frame_queues_[step_side]->pop(stepped_frame)) {
+              target->decoded_picture_number_++;
 
-          // Update PTS only — do NOT update delta_pts_ here because the time-shifted
-          // PTS difference (≈0 for CFR) is not the actual frame duration.  Corrupting
-          // delta_pts_ shrinks the sync tolerance and causes both sides to pop.
-          right_ptr->pts_ = right_ptr->frames_[0]->pts - right_ptr->effective_time_shift_;
+              // Move the offset by the distance between the frame being replaced and
+              // the one replacing it, which is exact, rather than by delta_pts_: that
+              // is a rolling average a single irregular interval can skew, and since
+              // the offset is frozen when the step is taken it would keep the error.
+              const int64_t replaced_pts = target->frames_.empty() ? stepped_frame->pts : target->frames_[0]->pts;
+              apply_right_step_offset(step_index, 1, stepped_frame->pts - replaced_pts);
+              frames_stepped++;
 
-          // Reset frame offset so display shows the newly stepped frame
-          frame_offset = 0;
-
-          // Notify user
-          const int64_t total_offset = right_step_offset_in_frames(active_right_index_, right_delta);
-          if (frames_stepped < step_right_frames) {
-            notify_step(string_sprintf("Right #%zu: %s%lld frames (reached end)",
-              active_right_index_ + 1,
-              total_offset > 0 ? "+" : "",
-              static_cast<long long>(total_offset)));
-          } else {
-            notify_step(string_sprintf("Right #%zu: %s%lld frames",
-              active_right_index_ + 1,
-              total_offset > 0 ? "+" : "",
-              static_cast<long long>(total_offset)));
-          }
-        } else {
-          // Could not step at all — already at the end
-          notify_step(string_sprintf("Right #%zu: reached end of video", active_right_index_ + 1));
-        }
-
-        skip_update = true;
-      }
-
-      // --- Per-right-video backward stepping (- key) ---
-      if (step_right_frames < 0 && !display_->get_play()) {
-        const int steps_back = -step_right_frames;  // positive count
-        const int buffered_frames = static_cast<int>(right_ptr->frames_.size()) - 1;  // frames available behind current
-
-        // Remember current front frame PTS to detect "didn't actually move"
-        const int64_t old_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
-
-        // Snapshot the offset so a step that turns out to be impossible can be
-        // taken back exactly.  Subtracting the requested amount would not do:
-        // the clamp below may commit less than was asked for.
-        const int64_t old_step_shift_av = per_right_step_shifts_av[active_right_index_];
-
-        bool clamped_at_start = false;
-
-        if (steps_back <= buffered_frames) {
-          // Fast path: target frame is already in the buffer — no seek needed.
-          // Move the newest N frames aside; the target becomes frames_[0].  They
-          // are kept rather than dropped so that stepping forward again can hand
-          // them back: the pipeline is not rewound here, so its head is N frames
-          // beyond the one now displayed.
-          for (int i = 0; i < steps_back; i++) {
-            const int64_t leaving_pts = right_ptr->frames_[0]->pts;
-
-            right_ptr->stepped_back_frames_.push_front(std::move(right_ptr->frames_.front()));
-            right_ptr->frames_.pop_front();
-
-            // As on the way forward, move the offset by the exact distance between
-            // the frames rather than by the delta_pts_ average.
-            apply_right_step_offset(active_right_index_, -1, leaving_pts - right_ptr->frames_[0]->pts);
-          }
-
-          // Recompute PTS and effective shift from the buffer frame now at front
-          const int64_t static_shift = compute_static_right_time_shift(active_right_index_);
-          right_ptr->effective_time_shift_ = static_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, right_ptr->frames_[0]->pts, true);
-          right_ptr->pts_ = right_ptr->frames_[0]->pts - right_ptr->effective_time_shift_;
-
-          frame_offset = 0;
-        } else {
-          // Slow path: target is beyond the buffer — partial seek required.
-          apply_right_step_offset(active_right_index_, step_right_frames, right_delta);  // negative
-
-          // A step reaching past the video's first frame cannot be honoured: the
-          // demuxer clamps there.  Reduce the offset to what is reachable, since
-          // the seek below derives pts_ from it and would otherwise place this
-          // side ahead of the frame it actually shows, leaving the sync pass to
-          // drag the LEFT video forward to a position that was never requested.
-          // The resulting target matches the clamp the full seek path applies.
-          if (right_ptr->first_pts_ > INT64_MIN) {
-            const int64_t reachable_shift = right_ptr->first_pts_ - left.pts_ - time_shift_offset_av_time_;
-
-            if (per_right_step_shifts_av[active_right_index_] < reachable_shift) {
-              per_right_step_shifts_av[active_right_index_] = reachable_shift;
-              clamped_at_start = true;
+              // Store every stepped frame, not just the one the loop ends on: the
+              // browse buffer and the backward fast path both take adjacent entries
+              // to be exactly one frame apart.
+              if (target->frames_.size() >= frame_buffer_size_) {
+                target->frames_.pop_back();
+              }
+              target->frames_.push_front(std::move(stepped_frame));
+            } else {
+              // Queue empty — cannot step further forward
+              break;
             }
           }
 
-          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
-          const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-          partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
-        }
+          if (frames_stepped > 0 && !target->frames_.empty()) {
+            // Compute effective time shift for the stepped video
+            const int64_t static_shift = compute_static_right_time_shift(step_index);
+            target->effective_time_shift_ = static_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, target->frames_[0]->pts, true);
 
-        // Check if the step actually moved to a different frame
-        const int64_t new_front_pts = right_ptr->frames_.empty() ? INT64_MIN : right_ptr->frames_[0]->pts;
+            // Update PTS only — do NOT update delta_pts_ here because the time-shifted
+            // PTS difference (≈0 for CFR) is not the actual frame duration.  Corrupting
+            // delta_pts_ shrinks the sync tolerance and causes both sides to pop.
+            target->pts_ = target->frames_[0]->pts - target->effective_time_shift_;
 
-        if (new_front_pts == old_front_pts) {
-          // Didn't move — put the offset back exactly as it was.
-          per_right_step_shifts_av[active_right_index_] = old_step_shift_av;
+            // Reset frame offset so display shows the newly stepped frame
+            frame_offset = 0;
 
-          // Only report "reached start" when the current frame is genuinely the
-          // first decoded frame of the video.  When the drain in
-          // partial_seek_right_video transiently fails to produce frames the PTS
-          // stays the same, but we are NOT necessarily at the start — suppress the
-          // misleading notification in that case.
-          if (right_ptr->first_pts_ > INT64_MIN && new_front_pts <= right_ptr->first_pts_) {
-            notify_step(string_sprintf("Right #%zu: reached start of video", active_right_index_ + 1));
+            // Notify user
+            const int64_t total_offset = right_step_offset_in_frames(step_index, target_delta);
+            if (frames_stepped < step_frames) {
+              notify_step(string_sprintf("%s: %s%lld frames (reached end)",
+                name.c_str(),
+                total_offset > 0 ? "+" : "",
+                static_cast<long long>(total_offset)));
+            } else {
+              notify_step(string_sprintf("%s: %s%lld frames",
+                name.c_str(),
+                total_offset > 0 ? "+" : "",
+                static_cast<long long>(total_offset)));
+            }
+          } else {
+            // Could not step at all — already at the end
+            notify_step(string_sprintf("%s: reached end of video", name.c_str()));
           }
-        } else {
-          // Notify user with current offset
-          const int64_t total_offset = right_step_offset_in_frames(active_right_index_, right_delta);
-          notify_step(string_sprintf("Right #%zu: %s%lld frames%s",
-            active_right_index_ + 1,
-            total_offset > 0 ? "+" : "",
-            static_cast<long long>(total_offset),
-            clamped_at_start ? " (reached start)" : ""));
+
+          skip_update = true;
         }
 
-        skip_update = true;
-      }
+        // --- backward stepping (- key) ---
+        if (step_frames < 0 && !display_->get_play()) {
+          const int steps_back = -step_frames;  // positive count
+          const int buffered_frames = static_cast<int>(target->frames_.size()) - 1;  // frames available behind current
 
-      // Handle Ctrl+0 reset of current right video's offset
-      if (display_->get_reset_right_offset()) {
-        // The AV-time offset decides, not the frame count beside it: the count is
-        // derived through a frame duration wherever a step could not measure the
-        // real distance, so it can read zero while the side is still shifted.
-        if (per_right_step_shifts_av[active_right_index_] != 0) {
-          per_right_step_shifts_av[active_right_index_] = 0;
+          // Remember current front frame PTS to detect "didn't actually move"
+          const int64_t old_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_[0]->pts;
 
-          // Trigger a partial seek to re-sync the right video with left's position
-          const int64_t effective_shift = compute_static_right_time_shift(active_right_index_);
-          const float right_target_position = left.pts_ * AV_TIME_TO_SEC + right_ptr->start_time_ + effective_shift * AV_TIME_TO_SEC;
-          partial_seek_right_video(active_right, *right_ptr, effective_shift, right_target_position);
+          // Snapshot the offset so a step that turns out to be impossible can be
+          // taken back exactly.  Subtracting the requested amount would not do:
+          // the clamp below may commit less than was asked for.
+          const int64_t old_step_shift_av = per_right_step_shifts_av[step_index];
 
-          notify_step(string_sprintf("Right #%zu: offset reset", active_right_index_ + 1));
+          bool clamped_at_start = false;
+
+          if (steps_back <= buffered_frames) {
+            // Fast path: target frame is already in the buffer — no seek needed.
+            // Move the newest N frames aside; the target becomes frames_[0].  They
+            // are kept rather than dropped so that stepping forward again can hand
+            // them back: the pipeline is not rewound here, so its head is N frames
+            // beyond the one now displayed.
+            for (int i = 0; i < steps_back; i++) {
+              const int64_t leaving_pts = target->frames_[0]->pts;
+
+              target->stepped_back_frames_.push_front(std::move(target->frames_.front()));
+              target->frames_.pop_front();
+
+              // As on the way forward, move the offset by the exact distance between
+              // the frames rather than by the delta_pts_ average.
+              apply_right_step_offset(step_index, -1, leaving_pts - target->frames_[0]->pts);
+            }
+
+            // Recompute PTS and effective shift from the buffer frame now at front
+            const int64_t static_shift = compute_static_right_time_shift(step_index);
+            target->effective_time_shift_ = static_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, target->frames_[0]->pts, true);
+            target->pts_ = target->frames_[0]->pts - target->effective_time_shift_;
+
+            frame_offset = 0;
+          } else {
+            // Slow path: target is beyond the buffer — partial seek required.
+            apply_right_step_offset(step_index, step_frames, target_delta);  // negative
+
+            // A step reaching past the video's first frame cannot be honoured: the
+            // demuxer clamps there.  Reduce the offset to what is reachable, since
+            // the seek below derives pts_ from it and would otherwise place this
+            // side ahead of the frame it actually shows, leaving the sync pass to
+            // drag the LEFT video forward to a position that was never requested.
+            // The resulting target matches the clamp the full seek path applies.
+            if (target->first_pts_ > INT64_MIN) {
+              const int64_t reachable_shift = target->first_pts_ - left.pts_ - time_shift_offset_av_time_;
+
+              if (per_right_step_shifts_av[step_index] < reachable_shift) {
+                per_right_step_shifts_av[step_index] = reachable_shift;
+                clamped_at_start = true;
+              }
+            }
+
+            const int64_t effective_shift = compute_static_right_time_shift(step_index);
+            const float right_target_position = left.pts_ * AV_TIME_TO_SEC + target->start_time_ + effective_shift * AV_TIME_TO_SEC;
+            partial_seek_right_video(step_side, *target, effective_shift, right_target_position);
+          }
+
+          // Check if the step actually moved to a different frame
+          const int64_t new_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_[0]->pts;
+
+          if (new_front_pts == old_front_pts) {
+            // Didn't move — put the offset back exactly as it was.
+            per_right_step_shifts_av[step_index] = old_step_shift_av;
+
+            // Only report "reached start" when the current frame is genuinely the
+            // first decoded frame of the video.  When the drain in
+            // partial_seek_right_video transiently fails to produce frames the PTS
+            // stays the same, but we are NOT necessarily at the start — suppress the
+            // misleading notification in that case.
+            if (target->first_pts_ > INT64_MIN && new_front_pts <= target->first_pts_) {
+              notify_step(string_sprintf("%s: reached start of video", name.c_str()));
+            }
+          } else {
+            // Notify user with current offset
+            const int64_t total_offset = right_step_offset_in_frames(step_index, target_delta);
+            notify_step(string_sprintf("%s: %s%lld frames%s",
+              name.c_str(),
+              total_offset > 0 ? "+" : "",
+              static_cast<long long>(total_offset),
+              clamped_at_start ? " (reached start)" : ""));
+          }
+
+          skip_update = true;
         }
+
+        // Handle Ctrl+0 reset of this video's offset
+        if (reset_offset) {
+          // The AV-time offset decides, not the frame count beside it: the count is
+          // derived through a frame duration wherever a step could not measure the
+          // real distance, so it can read zero while the side is still shifted.
+          if (per_right_step_shifts_av[step_index] != 0) {
+            per_right_step_shifts_av[step_index] = 0;
+
+            // Trigger a partial seek to re-sync this video with left's position
+            const int64_t effective_shift = compute_static_right_time_shift(step_index);
+            const float right_target_position = left.pts_ * AV_TIME_TO_SEC + target->start_time_ + effective_shift * AV_TIME_TO_SEC;
+            partial_seek_right_video(step_side, *target, effective_shift, right_target_position);
+
+            notify_step(string_sprintf("%s: offset reset", name.c_str()));
+          }
+        }
+      };
+
+      step_video(active_right, step_right_frames, display_->get_reset_right_offset());
+      if (ref_side_.is_valid()) {
+        step_video(ref_side_, display_->get_step_ref_frames(), display_->get_reset_ref_offset());
       }
 
       // When resuming playback after per-right stepping, the right video's

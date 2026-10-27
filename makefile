@@ -188,7 +188,11 @@ integration: $(integration_bin)
 	echo "Running $(integration_bin) right-step-edges (single decoder)"; \
 	$$wrap ./$(integration_bin) right-step-edges "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
 	echo "Running $(integration_bin) ref-overlay"; \
-	$$wrap ./$(integration_bin) ref-overlay "$$media/multi_sync_right0_25.mp4" "$$media/multi_sync_right1_25.mp4" "$$media/multi_sync_left_30.mp4"
+	$$wrap ./$(integration_bin) ref-overlay "$$media/multi_sync_right0_25.mp4" "$$media/multi_sync_right1_25.mp4" "$$media/multi_sync_left_30.mp4"; \
+	echo "Running $(integration_bin) ref-step"; \
+	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
+	echo "Running $(integration_bin) ref-step (single decoder)"; \
+	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"
 
 .PHONY: stress
 stress: $(integration_bin)
