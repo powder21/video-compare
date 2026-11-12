@@ -121,6 +121,13 @@ jobs:
           grep -q '^Bundled shared-build archive:' licenses/FFMPEG-SOURCE.txt
           grep -q '^Archive SHA-256:' licenses/FFMPEG-SOURCE.txt
 
+      - name: Prepare Chinese README
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          sed 's|\[README\.md\](README\.md)|[README.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/README.md)|' README.zh-CN.md > README.md
+          test -s keyboard-zh.svg
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -129,6 +136,8 @@ jobs:
             video-compare.exe
             *.dll
             README.md
+            keyboard-zh.svg
+            CHANGELOG.md
             LICENSE.md
             licenses/
           retention-days: 90
@@ -158,7 +167,7 @@ jobs:
           sudo apt-get install -y zip
 
           mkdir -p release
-          cp -f video-compare.exe README.md LICENSE.md release/
+          cp -f video-compare.exe README.md keyboard-zh.svg CHANGELOG.md LICENSE.md release/
           cp -a licenses release/
           # Copy all DLLs (if any) from the Windows artifact bundle.
           shopt -s nullglob
@@ -272,6 +281,12 @@ jobs:
           echo "Stripped executable. New size:"
           ls -lh video-compare
 
+      - name: Prepare Chinese README
+        run: |
+          set -euo pipefail
+          sed 's|\[README\.md\](README\.md)|[README.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/README.md)|' README.zh-CN.md > README.md
+          test -s keyboard-zh.svg
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -279,6 +294,8 @@ jobs:
           path: |
             video-compare
             README.md
+            keyboard-zh.svg
+            CHANGELOG.md
             LICENSE.md
             licenses/
           retention-days: 90
@@ -380,6 +397,12 @@ jobs:
           brew uninstall --ignore-dependencies ffmpeg sdl2 sdl2_ttf sdl3
           ./video-compare --version
 
+      - name: Prepare Chinese README
+        run: |
+          set -euo pipefail
+          sed 's|\[README\.md\](README\.md)|[README.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/README.md)|' README.zh-CN.md > README.md
+          test -s keyboard-zh.svg
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -388,6 +411,8 @@ jobs:
             video-compare
             libs
             README.md
+            keyboard-zh.svg
+            CHANGELOG.md
             LICENSE.md
             licenses/
           retention-days: 90
