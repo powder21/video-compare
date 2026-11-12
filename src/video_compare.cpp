@@ -38,7 +38,9 @@ static constexpr uint32_t RESYNC_UPDATE_RATE_US = ONE_SECOND_US / 10;
 static constexpr uint32_t NOMINAL_FPS_UPDATE_RATE_US = 1 * ONE_SECOND_US;
 
 static bool env_flag_enabled(const char* name) {
-  const char* v = std::getenv(name);
+  // Match SDL_setenv: on Windows SDL uses the process environment, while
+  // the C runtime's getenv can retain a separate, stale environment table.
+  const char* v = SDL_getenv(name);
   if (v == nullptr) {
     return false;
   }
