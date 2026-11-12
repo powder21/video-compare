@@ -3,6 +3,13 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## Unreleased
+
+- Frame-stepping integration tests wait for coherent, completed presentation
+  checkpoints instead of fixed 250/700 ms delays. This prevents slow macOS and
+  Windows runners from checking playback before it starts or a frame batch
+  before it finishes. Exact frame, offset, and boundary assertions remain strict.
+
 ## v1.8.0 — 2026-11-12
 
 - **All videos step forward and backward by one decoded frame.** `Shift+A/D`

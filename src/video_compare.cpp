@@ -1360,6 +1360,8 @@ void VideoCompare::compare() {
     double next_refresh_at = 0;
 
     const bool log_event_routing = env_flag_enabled("VIDEO_COMPARE_LOG_EVENT_ROUTING");
+    const bool log_frame_state = env_flag_enabled("VIDEO_COMPARE_LOG_FRAME_STATE");
+    bool frame_state_requested = false;
     bool was_playing = false;
 
     for (uint64_t frame_number = 0;; ++frame_number) {
@@ -1383,6 +1385,9 @@ void VideoCompare::compare() {
         const bool consumed_by_scope = scope_manager_->handle_event(event);
         if (!consumed_by_scope) {
           display_->handle_event(event);
+          if (log_frame_state && event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_x && (event.key.keysym.mod & KMOD_SHIFT)) {
+            frame_state_requested = true;
+          }
         }
 
         if (log_event_routing) {
@@ -2226,6 +2231,17 @@ void VideoCompare::compare() {
             }
 
             ui_refresh_performed = true;
+
+            // Optional Shift+X diagnostics after navigation and presentation.
+            // Unlike the input-handler dump, all PTS values here belong to one
+            // refresh, and pending steps distinguish a batch from its result.
+            if (frame_state_requested) {
+              frame_state_requested = false;
+              std::cout << string_sprintf("Frame state: play=%d pending=%d loop=%d right=%zu pts_left=%lld pts_right=%lld pts_ref=%lld",
+                  display_->get_play(), forward_navigate_frames, display_->get_buffer_play_loop_mode() != Display::Loop::Off,
+                  active_right_index_ + 1, static_cast<long long>(left_state_frame->pts), static_cast<long long>(right_state_frame->pts),
+                  static_cast<long long>(ref_display_frame != nullptr ? ref_display_frame->pts : INT64_MIN)) << std::endl;
+            }
 
             // calculate next refresh time dynamically based on target playback speed and current refresh timing
             const double target_time_us = std::max(1000.0, static_cast<double>(std::max(ffmpeg::frame_duration(left_display_frame), ffmpeg::frame_duration(right_display_frame))) / display_->get_playback_speed_factor());

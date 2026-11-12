@@ -39,6 +39,25 @@ Integration scenarios (one fresh process each):
 - `interactive-crop` — isolated post-scale Shift+L plus atomic Shift+B. Left is 320×180 with `scale=160:90`; right is 320×180 with `hflip`. Asserts the application `crop=` is in 320×180 crop-space (not the 160×90 dest), Backspace restores it, and Shift+B / unsupported visual-side crops change neither side.
 - `dynamic-swap` — 320×240 (4:3) left and 640×360 (16:9) right with Dynamic. The shared canvas is 16:9, so the content viewport pillarboxes to the original left input. Shift+X before and after visual Swap (`S`) must keep `ref_dar` at 4:3 and the same letterbox; following the visually-left side would switch the reference and viewport to 16:9.
 
+Frame-stepping, shared-decoder, and mixed-rate tests wait for completed frame
+checkpoints instead of assuming that a fixed sleep covers decoding or playback
+startup. They enable `VIDEO_COMPARE_LOG_FRAME_STATE=1`: Shift+X then reports an
+additional `Frame state:` line after navigation and presentation, with all input
+PTS from one refresh, playback/loop state, and the remaining forward-step count.
+The harness observes these lines through a synchronized output buffer. A wrong
+frame, unfinished batch, or stalled playback still fails within a bounded wait;
+the exact frame and offset assertions are unchanged.
+
+To exercise slow responses locally, generate fixtures and add a 350 ms delay to
+the harness's observation delivery (the playback implementation is unchanged):
+
+```sh
+tests/generate_integration_media.sh /tmp/video-compare-media
+VIDEO_COMPARE_TEST_QUERY_DELAY_MS=350 ./tests/integration_video_compare frame-stepping \
+  /tmp/video-compare-media/step_gop_25.mp4 /tmp/video-compare-media/step_gop_25.mp4 \
+  /tmp/video-compare-media/step_gop_25.mp4 /tmp/video-compare-media/step_gop_25.mp4
+```
+
 Adding a unit test:
 
 - `check` picks up `tests/test_*.cpp` automatically.

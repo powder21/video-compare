@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +13,8 @@
 #include <iostream>
 #include <limits.h>
 #include <memory>
+#include <mutex>
+#include <functional>
 #include <sstream>
 #include <string>
 #ifdef _WIN32
@@ -113,6 +116,97 @@ void sleep_ms(const int ms) {
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+struct FrameState {
+  bool playing{false};
+  bool looping{false};
+  int pending{0};
+  size_t right_id{0};
+  int64_t left_pts{INT64_MIN};
+  int64_t right_pts{INT64_MIN};
+  int64_t ref_pts{INT64_MIN};
+};
+
+// The application writes stdout on its main thread; the event script observes
+// complete diagnostic lines through this buffer, never an unsynchronized stream.
+class CapturedOutput : public std::streambuf {
+ public:
+  std::string str() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return output_;
+  }
+
+  size_t generation() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return generation_;
+  }
+
+  bool wait_for_frame(const size_t after, const std::chrono::steady_clock::time_point deadline, FrameState& frame) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!changed_.wait_until(lock, deadline, [&] { return generation_ > after; })) {
+      return false;
+    }
+    frame = frame_;
+    return true;
+  }
+
+ protected:
+  std::streamsize xsputn(const char* data, const std::streamsize count) override {
+    std::unique_lock<std::mutex> lock(mutex_);
+    output_.append(data, static_cast<size_t>(count));
+    line_.append(data, static_cast<size_t>(count));
+    size_t end;
+    while ((end = line_.find('\n')) != std::string::npos) {
+      const std::string line = line_.substr(0, end);
+      line_.erase(0, end + 1);
+      int play = 0, pending = 0, loop = 0;
+      size_t right_id = 0;
+      long long left = 0, right = 0, ref = 0;
+      if (std::sscanf(line.c_str(), "Frame state: play=%d pending=%d loop=%d right=%zu pts_left=%lld pts_right=%lld pts_ref=%lld",
+          &play, &pending, &loop, &right_id, &left, &right, &ref) == 7) {
+        // Optional harness-only delay reproduces slow CI responses without
+        // changing playback, or assuming any fixed wait is long enough.
+        const char* delay = std::getenv("VIDEO_COMPARE_TEST_QUERY_DELAY_MS");
+        if (delay != nullptr) {
+          lock.unlock();
+          sleep_ms(std::max(0, std::min(1000, std::atoi(delay))));
+          lock.lock();
+        }
+        frame_ = FrameState{play != 0, loop != 0, pending, right_id, left, right, ref};
+        ++generation_;
+        changed_.notify_all();
+      }
+    }
+    return count;
+  }
+
+  int_type overflow(const int_type ch) override {
+    if (!traits_type::eq_int_type(ch, traits_type::eof())) {
+      const char byte = traits_type::to_char_type(ch);
+      xsputn(&byte, 1);
+    }
+    return traits_type::not_eof(ch);
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  std::string output_;
+  std::string line_;
+  FrameState frame_;
+  size_t generation_{0};
+};
+
+int native_frame_index(const int64_t pts, const bool variable = false, const int fps = 25) {
+  if (pts == INT64_MIN) {
+    return -1;
+  }
+  const int ticks = static_cast<int>(std::llround(pts * (fps / 1000000.0)));
+  if (variable) {
+    return ticks % 4 <= 1 ? ticks / 4 * 2 + ticks % 4 : -1;
+  }
+  return ticks;
+}
+
 void require_readable_file(const char* path) {
   FILE* file = std::fopen(path, "rb");
   if (file == nullptr) {
@@ -162,6 +256,49 @@ void push_keydown(const SDL_Keycode key, const SDL_Scancode scancode, const Uint
     events_pushed.fetch_add(1);
   }
 }
+
+class FrameProbe {
+ public:
+  FrameProbe(CapturedOutput& output, std::vector<FrameState>& checkpoints, const bool variable)
+      : output_(output), checkpoints_(checkpoints), variable_(variable) {}
+
+  FrameState wait(const char* label, const std::function<bool(const FrameState&)>& ready, const bool record = true) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    FrameState state;
+    while (std::chrono::steady_clock::now() < deadline) {
+      const size_t after = output_.generation();
+      push_keydown(SDLK_x, SDL_SCANCODE_X, 0, KMOD_SHIFT);
+      if (!output_.wait_for_frame(after, deadline, state)) {
+        break;
+      }
+      if (ready(state)) {
+        if (record) {
+          checkpoints_.push_back(state);
+        }
+        return state;
+      }
+      sleep_ms(10);
+    }
+    throw std::runtime_error(string_sprintf("%s timed out: play=%d pending=%d loop=%d right=%zu pts=%lld/%lld/%lld",
+        label, state.playing, state.pending, state.looping, state.right_id,
+        static_cast<long long>(state.left_pts), static_cast<long long>(state.right_pts), static_cast<long long>(state.ref_pts)));
+  }
+
+  FrameState at(const char* label, const int left, const int right, const int ref, const size_t right_id = 1, const int right_fps = 25) {
+    return wait(label, [&](const FrameState& state) {
+      return !state.playing && !state.looping && state.pending == 0 && state.right_id == right_id &&
+          index(state.left_pts) == left && native_frame_index(state.right_pts, variable_, right_fps) == right &&
+          (ref < 0 || index(state.ref_pts) == ref);
+    });
+  }
+
+  int index(const int64_t pts) const { return native_frame_index(pts, variable_); }
+
+ private:
+  CapturedOutput& output_;
+  std::vector<FrameState>& checkpoints_;
+  const bool variable_;
+};
 
 void push_keyup(const SDL_Keycode key, const SDL_Scancode scancode, const Uint32 window_id) {
   SDL_Event event{};
@@ -621,20 +758,7 @@ void print_stress_failure(const Scenario scenario, const char* message, const st
   std::fprintf(stderr, " %s\n", message);
 }
 
-void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
-  const int watchdog_ticks = watchdog_ticks_for(scenario);
-  std::thread watchdog([scenario, watchdog_ticks, &finished]() {
-    for (int i = 0; i < watchdog_ticks && !finished.load(); ++i) {
-      sleep_ms(100);
-    }
-    if (!finished.load()) {
-      watchdog_fired.store(true);
-      std::fprintf(stderr, "watchdog: pushing SDL_QUIT after %ds deadline (%s iteration=%s)\n", watchdog_ticks / 10, scenario_name(scenario),
-                   stress_iteration_label());
-      push_quit();
-    }
-  });
-
+void run_event_script_body(const Scenario scenario, CapturedOutput& captured_out, std::vector<FrameState>& checkpoints) {
   // Construction already created Display/SDL. operator() starts workers
   // immediately after this thread is launched; wait for first frames.
   sleep_ms(1000);
@@ -722,87 +846,93 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     sleep_ms(700);
     push_copy_timestamp();
     sleep_ms(200);
-  } else if (scenario == Scenario::SharedFrameStepping) {
-    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
-    sleep_ms(300);
-    dump_display_filters(); // 0: shared decoder, all level
-    push_keydown(SDLK_MINUS, SDL_SCANCODE_MINUS, 0, KMOD_CTRL);
-    sleep_ms(500);
-    dump_display_filters(); // 1: only right 1 rewound, forcing independent decode
-    push_keydown(SDLK_PLUS, SDL_SCANCODE_EQUALS, 0, KMOD_CTRL);
-    sleep_ms(500);
-    dump_display_filters(); // 2: restored, other decoders still need alignment
-    for (int i = 0; i < 20; ++i) {
-      push_keydown(SDLK_d, SDL_SCANCODE_D, 0, KMOD_SHIFT);
-    }
-    sleep_ms(900);
-    dump_display_filters(); // 3: every input must advance exactly twenty frames
-    push_keydown(SDLK_TAB, SDL_SCANCODE_TAB, 0);
-    sleep_ms(300);
-    dump_display_filters(); // 4: the inactive right must have advanced too
-  } else if (scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr) {
+  } else if (scenario == Scenario::SharedFrameStepping || scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr) {
+    const bool variable = scenario == Scenario::FrameSteppingVfr;
+    FrameProbe probe(captured_out, checkpoints, variable);
     auto key = [](const SDL_Keycode code, const SDL_Scancode scancode, const SDL_Keymod mod = KMOD_NONE) {
       push_keydown(code, scancode, 0, mod);
-      sleep_ms(250);
     };
-    auto snapshot = []() {
-      dump_display_filters();
-      push_copy_timestamp();
-      sleep_ms(150);
-    };
+    // Wait for actual playback before pausing. Startup latency is platform-specific.
+    probe.wait("initial playback", [&](const FrameState& state) {
+      return state.playing && probe.index(state.left_pts) >= 12 && state.left_pts == state.right_pts && state.left_pts == state.ref_pts;
+    }, false);
     key(SDLK_SPACE, SDL_SCANCODE_SPACE);
-    snapshot(); // 0: initial position
-    for (int direction : {-1, 1}) {
-      for (int i = 0; i < 6; ++i) {
-        key(direction < 0 ? SDLK_a : SDLK_d, direction < 0 ? SDL_SCANCODE_A : SDL_SCANCODE_D, KMOD_SHIFT);
-        key(SDLK_TAB, SDL_SCANCODE_TAB); // inspect both rights, including hidden steps
-        snapshot(); // 1..6: rewind beyond the 3-frame history; 7..12: replay
+    const auto initial_state = probe.wait("initial pause", [&](const FrameState& state) {
+      return !state.playing && state.pending == 0 && probe.index(state.left_pts) >= 12 && state.left_pts == state.right_pts && state.left_pts == state.ref_pts;
+    });
+    const int initial = probe.index(initial_state.left_pts);
+    if (scenario == Scenario::SharedFrameStepping) {
+      key(SDLK_MINUS, SDL_SCANCODE_MINUS, KMOD_CTRL);
+      probe.at("independent rewind", initial, initial - 10, initial);
+      key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
+      probe.at("independent replay", initial, initial, initial);
+      for (int i = 0; i < 20; ++i) {
+        key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
       }
+      probe.at("shared decoder split", initial + 20, initial + 20, initial + 20);
+      key(SDLK_TAB, SDL_SCANCODE_TAB);
+      probe.at("inactive right pipeline", initial + 20, initial + 20, initial + 20, 2);
+    } else {
+      int current = initial;
+      size_t active = 1;
+      for (int direction : {-1, 1}) {
+        for (int i = 0; i < 6; ++i) {
+          key(direction < 0 ? SDLK_a : SDLK_d, direction < 0 ? SDL_SCANCODE_A : SDL_SCANCODE_D, KMOD_SHIFT);
+          key(SDLK_TAB, SDL_SCANCODE_TAB);
+          active = 3 - active;
+          current += direction;
+          probe.at("adjacent native frames", current, current, current, active);
+        }
+      }
+      key(SDLK_a, SDL_SCANCODE_A);
+      probe.at("browse previous frame", initial - 1, initial - 1, initial - 1);
+      key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
+      probe.at("step from browsed frame", initial, initial, initial);
+      key(SDLK_MINUS, SDL_SCANCODE_MINUS, KMOD_CTRL);
+      probe.at("right ten-frame rewind", initial, initial - 10, initial);
+      key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
+      probe.at("right ten-frame replay", initial, initial, initial);
+      key(SDLK_q, SDL_SCANCODE_Q);
+      key(SDLK_MINUS, SDL_SCANCODE_MINUS, KMOD_CTRL);
+      push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
+      probe.at("reference ten-frame rewind", initial, initial, initial - 10);
+      key(SDLK_q, SDL_SCANCODE_Q);
+      key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
+      push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
+      probe.at("reference ten-frame replay", initial, initial, initial);
+      for (int i = 0; i < 100; ++i) {
+        key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
+      }
+      probe.at("start clamp", 0, 0, 0);
+      key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
+      probe.at("stable start clamp", 0, 0, 0);
+      key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
+      probe.at("second frame", 1, 1, 1);
+      key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
+      probe.at("first frame", 0, 0, 0);
+      key(SDLK_SPACE, SDL_SCANCODE_SPACE);
+      // Re-alignment may take longer than 250 ms; pause only after playback
+      // has actually advanced, then observe one coherent paused snapshot.
+      probe.wait("resumed playback", [&](const FrameState& state) {
+        return state.playing && probe.index(state.left_pts) > 1 && state.left_pts == state.right_pts && state.left_pts == state.ref_pts;
+      }, false);
+      key(SDLK_SPACE, SDL_SCANCODE_SPACE);
+      probe.wait("pause after resumed playback", [&](const FrameState& state) {
+        return !state.playing && state.pending == 0 && probe.index(state.left_pts) > 1 && state.left_pts == state.right_pts && state.left_pts == state.ref_pts;
+      });
+      for (int i = 0; i < 100; ++i) {
+        key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
+      }
+      const int last = variable ? 49 : 99;
+      // Wait for the batch counter to drain as well as for the final frame.
+      probe.at("batch reaches EOF", last, last, last);
+      key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
+      probe.at("stable EOF clamp", last, last, last);
+      key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
+      probe.at("rewind after EOF", last - 1, last - 1, last - 1);
+      key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
+      probe.at("replay final frame", last, last, last);
     }
-    key(SDLK_a, SDL_SCANCODE_A);
-    snapshot(); // 13: browse back in the buffer
-    key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
-    snapshot(); // 14: step from the displayed frame, not the buffer head
-    key(SDLK_MINUS, SDL_SCANCODE_MINUS, KMOD_CTRL);
-    snapshot(); // 15: right 1 back ten actual frames (cache miss)
-    key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
-    snapshot(); // 16: right 1 exactly restored
-    key(SDLK_q, SDL_SCANCODE_Q);
-    key(SDLK_MINUS, SDL_SCANCODE_MINUS, KMOD_CTRL);
-    push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
-    sleep_ms(200);
-    snapshot(); // 17: reference back ten actual frames (cache miss)
-    key(SDLK_q, SDL_SCANCODE_Q);
-    key(SDLK_PLUS, SDL_SCANCODE_EQUALS, KMOD_CTRL);
-    push_keyup(SDLK_q, SDL_SCANCODE_Q, 0);
-    sleep_ms(200);
-    snapshot(); // 18: reference exactly restored
-    // Batch more steps than remain, then verify the first-frame clamp is stable.
-    for (int i = 0; i < 100; ++i) {
-      push_keydown(SDLK_a, SDL_SCANCODE_A, 0, KMOD_SHIFT);
-    }
-    sleep_ms(700);
-    snapshot(); // 19: first frame of every video
-    key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
-    snapshot(); // 20: still at the first frame
-    key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
-    snapshot(); // 21: exactly the second frame
-    key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
-    snapshot(); // 22: first frame again
-    key(SDLK_SPACE, SDL_SCANCODE_SPACE);
-    key(SDLK_SPACE, SDL_SCANCODE_SPACE);
-    snapshot(); // 23: resumed playback is live and all videos stay aligned
-    for (int i = 0; i < 100; ++i) {
-      push_keydown(SDLK_d, SDL_SCANCODE_D, 0, KMOD_SHIFT);
-    }
-    sleep_ms(700);
-    snapshot(); // 24: final frame of every video
-    key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
-    snapshot(); // 25: remains at the end
-    key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
-    snapshot(); // 26: backward still works after EOF
-    key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
-    snapshot(); // 27: replay the final frame
   } else if (scenario == Scenario::BufferForwardOnly || scenario == Scenario::BufferPingPong) {
     // Fill the 3-slot history, pause so offset 0 stays on the newest frame,
     // then slow to 1/16x so timer-driven steps are ~640 ms. J is the
@@ -1158,35 +1288,48 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
     sleep_ms(400);
   } else if (scenario == Scenario::MixedRateRights) {
-    // Native stepping deliberately lets 25/30 fps timestamps diverge. Each
-    // input must move exactly one of its own frames; playback resynchronizes.
+    FrameProbe probe(captured_out, checkpoints, false);
     auto key = [](const SDL_Keycode code, const SDL_Scancode scancode, const SDL_Keymod mod = KMOD_NONE) {
       push_keydown(code, scancode, 0, mod);
-      sleep_ms(250);
     };
+    probe.wait("mixed-rate startup", [](const FrameState& state) {
+      return state.playing && native_frame_index(state.left_pts) >= 20;
+    }, false);
     key(SDLK_SPACE, SDL_SCANCODE_SPACE);
-    dump_display_filters(); // 0: right 1, 25 fps
+    probe.wait("mixed-rate pause", [](const FrameState& state) {
+      return !state.playing && state.pending == 0 && state.right_id == 1 && state.left_pts == state.right_pts;
+    });
     key(SDLK_TAB, SDL_SCANCODE_TAB);
-    dump_display_filters(); // 1: right 2, 30 fps baseline
+    const auto baseline = probe.wait("30 fps right selected", [](const FrameState& state) {
+      return !state.playing && state.pending == 0 && state.right_id == 2;
+    });
+    int left = native_frame_index(baseline.left_pts);
+    int right = native_frame_index(baseline.right_pts, false, 30);
     for (int direction : {1, -1}) {
       for (int i = 0; i < 7; ++i) {
         key(direction > 0 ? SDLK_d : SDLK_a, direction > 0 ? SDL_SCANCODE_D : SDL_SCANCODE_A, KMOD_SHIFT);
-        dump_display_filters(); // 2..8: seven forwards; 9..15: seven backwards
+        left += direction;
+        right += direction;
+        probe.at("mixed-rate native step", left, right, -1, 2, 30);
       }
     }
     key(SDLK_SPACE, SDL_SCANCODE_SPACE);
+    auto synchronized = [&](const FrameState& state) {
+      return state.pending == 0 && native_frame_index(state.left_pts) > left && std::llabs(state.left_pts - state.right_pts) <= 27000;
+    };
+    probe.wait("mixed-rate playback resynchronizes", [&](const FrameState& state) { return state.playing && synchronized(state); }, false);
     key(SDLK_SPACE, SDL_SCANCODE_SPACE);
-    dump_display_filters(); // 16: playback synchronized again
+    probe.wait("mixed-rate playback paused", [&](const FrameState& state) { return !state.playing && synchronized(state); });
     key(SDLK_SPACE, SDL_SCANCODE_SPACE);
+    probe.wait("playing before Shift+D", [](const FrameState& state) { return state.playing; }, false);
     key(SDLK_d, SDL_SCANCODE_D, KMOD_SHIFT);
-    dump_display_filters(); // 17: Shift+D itself pauses playback
-    sleep_ms(400);
-    dump_display_filters(); // 18: no extra frames while paused
+    const auto paused = probe.wait("Shift+D pauses playback", [](const FrameState& state) { return !state.playing && !state.looping && state.pending == 0; });
+    probe.at("Shift+D remains paused", native_frame_index(paused.left_pts), native_frame_index(paused.right_pts, false, 30), -1, 2, 30);
     key(SDLK_PERIOD, SDL_SCANCODE_PERIOD);
+    probe.wait("buffer loop started", [](const FrameState& state) { return state.looping; }, false);
     key(SDLK_a, SDL_SCANCODE_A, KMOD_SHIFT);
-    dump_display_filters(); // 19: Shift+A exits a buffer loop and pauses
-    sleep_ms(400);
-    dump_display_filters(); // 20: remains paused
+    const auto loop_paused = probe.wait("Shift+A exits buffer loop", [](const FrameState& state) { return !state.playing && !state.looping && state.pending == 0; });
+    probe.at("Shift+A remains paused", native_frame_index(loop_paused.left_pts), native_frame_index(loop_paused.right_pts, false, 30), -1, 2, 30);
   } else if (scenario == Scenario::RightStepEdges) {
     // The directions right-step-play leaves out: Ctrl+- and Alt++, the latter
     // running into the end of the 100-frame fixture.
@@ -1202,6 +1345,29 @@ void run_event_script(const Scenario scenario, std::atomic<bool>& finished) {
     push_keydown(SDLK_0, SDL_SCANCODE_0, 0, KMOD_CTRL);
     sleep_ms(700);
     dump_display_filters();  // 3: level again
+  }
+
+}
+
+void run_event_script(const Scenario scenario, std::atomic<bool>& finished, CapturedOutput& captured_out, std::vector<FrameState>& checkpoints, std::string& script_error) {
+  const int watchdog_ticks = watchdog_ticks_for(scenario);
+  std::thread watchdog([scenario, watchdog_ticks, &finished]() {
+    for (int i = 0; i < watchdog_ticks && !finished.load(); ++i) {
+      sleep_ms(100);
+    }
+    if (!finished.load()) {
+      watchdog_fired.store(true);
+      std::fprintf(stderr, "watchdog: pushing SDL_QUIT after %ds deadline (%s iteration=%s)\n", watchdog_ticks / 10, scenario_name(scenario),
+                   stress_iteration_label());
+      push_quit();
+    }
+  });
+
+  try {
+    run_event_script_body(scenario, captured_out, checkpoints);
+  } catch (const std::exception& exception) {
+    script_error = exception.what();
+    std::fprintf(stderr, "FAIL event script: %s\n", script_error.c_str());
   }
 
   push_quit();
@@ -1280,8 +1446,12 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
     config.frame_buffer_size = 3;
   }
 
-  std::ostringstream captured_out;
-  std::streambuf* const old_out = std::cout.rdbuf(captured_out.rdbuf());
+  const bool observe_frames = scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr || scenario == Scenario::SharedFrameStepping || scenario == Scenario::MixedRateRights;
+  SDL_setenv("VIDEO_COMPARE_LOG_FRAME_STATE", observe_frames ? "1" : "0", 1);
+  CapturedOutput captured_out;
+  std::vector<FrameState> checkpoints;
+  std::string script_error;
+  std::streambuf* const old_out = std::cout.rdbuf(&captured_out);
 
   std::atomic<bool> finished{false};
   std::thread helper;
@@ -1289,7 +1459,7 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
 
   try {
     VideoCompare video_compare(config);
-    helper = std::thread(run_event_script, scenario, std::ref(finished));
+    helper = std::thread(run_event_script, scenario, std::ref(finished), std::ref(captured_out), std::ref(checkpoints), std::ref(script_error));
     video_compare();
   } catch (const std::exception& exception) {
     finished.store(true);
@@ -1309,6 +1479,10 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
 
   const std::string output = captured_out.str();
   std::cout << output;
+  if (!script_error.empty() || watchdog_fired.load()) {
+    std::fprintf(stderr, "FAIL %s: %s\n", scenario_name(scenario), script_error.empty() ? "watchdog deadline reached" : script_error.c_str());
+    return EXIT_FAILURE;
+  }
 
   if (scenario == Scenario::EventInjection) {
     if (output.find("Active right video: 2/2") == std::string::npos) {
@@ -1507,7 +1681,7 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       }
     }
   } else if (scenario == Scenario::SharedFrameStepping) {
-    const auto dumps = parse_display_filters(output);
+    const auto& dumps = checkpoints;
     std::string failure;
     int initial = -1;
     if (dumps.size() != 5) {
@@ -1515,10 +1689,9 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
     }
     for (size_t i = 0; i < dumps.size() && failure.empty(); ++i) {
       int left = -1, right = -1, ref = -1;
-      if (std::sscanf(dumps[i].frame_left.c_str(), "%d", &left) != 1 || std::sscanf(dumps[i].frame_right.c_str(), "%d", &right) != 1 || std::sscanf(dumps[i].frame_ref.c_str(), "%d", &ref) != 1) {
-        failure = "missing frame numbers";
-        break;
-      }
+      left = native_frame_index(dumps[i].left_pts);
+      right = native_frame_index(dumps[i].right_pts);
+      ref = native_frame_index(dumps[i].ref_pts);
       if (i == 0) {
         initial = left;
       }
@@ -1533,39 +1706,25 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       std::printf("PASS shared-frame-stepping: global steps remain adjacent after independent stepping splits the shared decoder\n");
     }
   } else if (scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr) {
-    const auto dumps = parse_display_filters(output);
-    const auto times = copied_positions(output);
+    const bool variable = scenario == Scenario::FrameSteppingVfr;
     std::string failure;
-    auto native_index = [&](const double seconds) {
-      const int ticks = static_cast<int>(std::llround(seconds * 25));
-      // VFR fixtures alternate 40 and 120 ms intervals on a 25 Hz time base.
-      return scenario == Scenario::FrameSteppingVfr ? ticks / 4 * 2 + (ticks % 4 == 1 ? 1 : 0) : ticks;
-    };
-    if (dumps.size() != 28 || times.size() != 28) {
-      failure = "expected 28 frame dumps and copied positions";
+    if (checkpoints.size() != 28) {
+      failure = "expected 28 completed frame checkpoints";
     } else {
-      const int initial = native_index(times[0]);
-      if (initial < 10) {
-        failure = "playback did not fill enough history";
-      }
-      const int last = scenario == Scenario::FrameSteppingVfr ? 49 : 99;
-      for (size_t i = 0; i < dumps.size() && failure.empty(); ++i) {
-        int left = -1, right = -1, ref = -1;
-        const auto& dump = dumps[i];
-        if (std::sscanf(dump.frame_left.c_str(), "%d", &left) != 1 || std::sscanf(dump.frame_right.c_str(), "%d", &right) != 1 || std::sscanf(dump.frame_ref.c_str(), "%d", &ref) != 1) {
-          failure = "videos disagree at dump " + std::to_string(i);
-          break;
-        }
+      const int initial = native_frame_index(checkpoints[0].left_pts, variable);
+      const int last = variable ? 49 : 99;
+      for (size_t i = 0; i < checkpoints.size() && failure.empty(); ++i) {
+        const auto& state = checkpoints[i];
+        const int left = native_frame_index(state.left_pts, variable);
+        const int right = native_frame_index(state.right_pts, variable);
+        const int ref = native_frame_index(state.ref_pts, variable);
         const int expected = i <= 6 ? initial - static_cast<int>(i)
             : i <= 12 ? initial - 6 + static_cast<int>(i - 6)
             : i == 13 ? initial - 1 : i <= 18 ? initial : i >= 24 ? last - (i == 26 ? 1 : 0) : i == 21 ? 1 : 0;
-        const int actual = native_index(times[i]);
-        const int right_native = native_index(right / 25.0);
-        const int ref_native = native_index(ref / 25.0);
-        if (right_native != actual - (i == 15 ? 10 : 0) || ref_native != actual - (i == 17 ? 10 : 0)) {
-          failure = "independent offsets or global frames disagree at dump " + std::to_string(i);
-        } else if ((i != 23 && actual != expected) || (i == 23 && actual <= 1)) {
-          failure = string_sprintf("dump %zu: expected native frame %d, got %d (%.3f s)", i, expected, actual, times[i]);
+        if (state.playing || state.looping || state.pending != 0 || right != left - (i == 15 ? 10 : 0) || ref != left - (i == 17 ? 10 : 0)) {
+          failure = "independent offsets or unfinished navigation at checkpoint " + std::to_string(i);
+        } else if ((i != 23 && left != expected) || (i == 23 && left <= 1)) {
+          failure = string_sprintf("checkpoint %zu: expected native frame %d, got %d", i, expected, left);
         }
       }
     }
@@ -1573,7 +1732,7 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       std::fprintf(stderr, "FAIL %s: %s\ncaptured stdout:\n%s\n", scenario_name(scenario), failure.c_str(), output.c_str());
       exit_code = EXIT_FAILURE;
     } else {
-      std::printf("PASS %s: all rights and reference rewind/replay exact frames across cache misses, browse correctly, clamp at start, and resume\n", scenario_name(scenario));
+      std::printf("PASS %s: 28 completed checkpoints, exact adjacent frames, offsets, first/last clamps, replay and playback resumption\n", scenario_name(scenario));
     }
   } else if (scenario == Scenario::BufferForwardOnly || scenario == Scenario::BufferPingPong) {
     const std::vector<double> times = copied_positions(output);
@@ -2083,15 +2242,17 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       std::printf("PASS crop-preview selected exactly what was dragged, either way round, and 4/6/R/Esc kept it alive\n");
     }
   } else if (scenario == Scenario::MixedRateRights) {
-    const auto dumps = parse_display_filters(output);
+    const auto& dumps = checkpoints;
     std::string failure;
     std::vector<int> left(dumps.size()), right(dumps.size());
     if (dumps.size() != 21) {
       failure = "expected 21 frame dumps";
     }
     for (size_t i = 0; i < dumps.size() && failure.empty(); ++i) {
-      if (std::sscanf(dumps[i].frame_left.c_str(), "%d", &left[i]) != 1 || std::sscanf(dumps[i].frame_right.c_str(), "%d", &right[i]) != 1) {
-        failure = "missing frame numbers";
+      left[i] = native_frame_index(dumps[i].left_pts);
+      right[i] = native_frame_index(dumps[i].right_pts, false, i == 0 ? 25 : 30);
+      if (dumps[i].playing || dumps[i].pending != 0 || dumps[i].looping) {
+        failure = "navigation was not complete";
       } else if (i == 0 && left[i] != right[i]) {
         failure = "25 fps pair not level";
       } else if (i >= 2 && i <= 15) {
