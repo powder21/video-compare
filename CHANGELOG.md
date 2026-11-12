@@ -3,6 +3,23 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## v1.8.0 — 2026-11-12
+
+- **All videos step forward and backward by one decoded frame.** `Shift+A/D`
+  pause playback and buffer loops, then move the left video, every right video,
+  and the reference to their adjacent frames. Backward steps use contiguous
+  history first; when it runs out, decoding from an earlier keyframe finds the
+  exact predecessor instead of estimating a time seek. Right/reference `-`
+  shares the same implementation, including ten- and hundred-frame steps.
+- Stepping continues from the frame actually displayed when browsing history.
+  Paused steps no longer skip extra frames to synchronize different frame rates;
+  resumed playback synchronizes by timestamp again. Pipelines that leave shared
+  decoding resume at their displayed positions, including open-GOP B-frames.
+- Regression coverage includes long GOPs, B-frames, variable frame durations,
+  mixed frame rates, shared decoding, independent offsets, start/end clamps,
+  replay after EOF, and playback resumption. All 11 unit suites and 27
+  integration invocations pass.
+
 ## v1.7.1 — 2026-10-27
 
 - **The reference video can be stepped into line.** While `Q` is held, `+`/`-`

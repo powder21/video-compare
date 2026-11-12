@@ -6,10 +6,6 @@
 
 namespace playback_navigation {
 
-inline float seek_relative_after_backward_navigation(const float seek_relative, const int frame_navigation_delta, const int64_t frame_delta) {
-  return seek_relative + static_cast<float>(frame_navigation_delta) * (static_cast<float>(frame_delta) * AV_TIME_TO_SEC);
-}
-
 inline int adjusted_frame_offset(const int current_offset, const int adjustment, const int last_common_index) {
   return std::min(std::max(0, current_offset + adjustment), last_common_index);
 }

@@ -29,6 +29,10 @@ Integration scenarios (one fresh process each):
 - `sync-mismatch`
 - `multi-right-sync`
 - `frame-navigation`
+- `frame-stepping` — two selectable rights plus a reference, with only three history slots. Long-GOP/B-frame fixtures verify exact backward/forward steps across cache misses, stepping from a browsed frame, independent ten-frame right/reference offsets, first/last-frame clamps, EOF replay, and playback resumption. Also runs with one shared decoder.
+- `frame-stepping-vfr` — the same sequence with alternating 40/120 ms frame intervals and `trust_dec_pts=1`, checking native frame counts rather than estimated time jumps.
+- `mixed-rate-rights` — 25/25/30 fps inputs, with automatic frame-rate conversion disabled. Every paused forward/backward step moves each input exactly one native frame; resumed playback synchronizes again. Shift+A/D also pause playing video and exit buffer loops.
+- `shared-frame-stepping` — independent stepping splits a shared decoder, then twenty global forward steps verify that every formerly dormant right/reference pipeline continues from its displayed position.
 - `buffer-forward-only`
 - `buffer-pingpong`
 - `crop-copy` — Shift+L/R mouse crop, Ctrl+Shift+L/R, Ctrl+L/R visual-side clear, Backspace undo, and right-video selection through the real Display → VideoCompare → VideoFilterer path. Asserts `crop=` in the Shift+X filter dump, plus `swapped` / `right` / visual-size ownership across Swap. Uses 320×180 / 640×360 / 160×90 rights so copy is normalized, not pixel-identical.

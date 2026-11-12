@@ -3744,6 +3744,7 @@ void Display::handle_event(const SDL_Event& event) {
         }
         case SDLK_a:
           if (is_shift_down) {
+            set_buffer_play_loop_mode(Loop::Off);
             --frame_navigation_delta_;
           } else {
             frame_buffer_offset_delta_++;
@@ -3751,6 +3752,7 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_d:
           if (is_shift_down) {
+            set_buffer_play_loop_mode(Loop::Off);
             frame_navigation_delta_++;
           } else {
             frame_buffer_offset_delta_--;

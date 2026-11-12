@@ -255,8 +255,8 @@ see all supported options.
 - `Ctrl+Shift+R`: Copy right crop to left
 - `Shift+B`: Crop both videos to the same area
 - `Backspace`: Undo last crop operation
-- `Shift+D`: Decode and advance one frame
-- `Shift+A`: Seek to the previous frame (best with intra-frame formats)
+- `Shift+D`: Advance all videos one frame, replaying cached frames after a backward step
+- `Shift+A`: Step all videos back one frame; decode from an earlier keyframe when history is exhausted
 - `Shift+M`: Cycle display mode
 - `Shift+S`: Cycle aspect view mode
 - `Shift+F`: Select a region and open a crop preview; in the preview, `4` zooms to 1:1 pixels, `6` to 100%, `R` fits the window, `Enter` saves the concatenation and `Shift+Enter` saves every cutout
@@ -269,6 +269,8 @@ see all supported options.
 - `Ctrl+V` / `Cmd+V`: Paste a timestamp from the clipboard and seek to that position
 - `Ctrl` + `+/-`: Time-shift right video by 10 frames
 - `Alt` + `+/-`: Time-shift right video by 100 frames
+
+`Shift+A/D` pause playback and buffer loops. Each video moves by one decoded frame, including at different frame rates; playback resynchronizes by timestamp when resumed. With automatic frame-rate conversion disabled, these are the inputs' native frames.
 
 ### Mouse Controls
 

@@ -41,6 +41,19 @@ generate_clip "$out_dir/right2_25.mp4" 1
 generate_clip "$out_dir/seek_left_25.mp4" 4
 generate_clip "$out_dir/seek_right_25.mp4" 4
 generate_clip "$out_dir/step_right1_25.mp4" 4
+# Inter-frame clips with B-frames exercise rewinds across keyframe boundaries.
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'testsrc=size=320x180:rate=25:duration=4' \
+  -pix_fmt yuv420p -c:v mpeg4 -q:v 5 -g 25 -bf 2 \
+  "$out_dir/step_gop_25.mp4"
+cp "$out_dir/step_gop_25.mp4" "$out_dir/step_gop_right_25.mp4"
+# 50 actual frames with alternating 40/120 ms intervals. No synthesized frames.
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'testsrc=size=320x180:rate=25:duration=2' \
+  -vf 'setpts=(floor(N/2)*4+mod(N\,2))/(25*TB)' -fps_mode vfr \
+  -pix_fmt yuv420p -c:v mpeg4 -q:v 5 -g 25 -bf 2 \
+  "$out_dir/step_vfr.mp4"
+cp "$out_dir/step_vfr.mp4" "$out_dir/step_vfr_right.mp4"
 generate_clip "$out_dir/sync_left_25.mp4" 2 25
 generate_clip "$out_dir/sync_right_30.mp4" 2 30
 generate_clip "$out_dir/multi_sync_left_30.mp4" 3 30

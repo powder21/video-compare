@@ -1062,6 +1062,10 @@ struct SideState {
   const AVRational frame_rate_;
 
   std::deque<AVFrameUniquePtr> frames_;
+  // Playback synchronization can discard frames and replace the buffer head.
+  // Such history is browsable, but cannot promise native-frame adjacency.
+  bool frame_buffer_contiguous_ = true;
+  bool pipeline_needs_realign_ = false;
 
   // Frames taken off the front of frames_ by backward steps, oldest first.  A
   // backward step rewinds the browse buffer but not the decode pipeline, so the
@@ -1140,15 +1144,23 @@ void VideoCompare::compare() {
       return time_shift_offset_av_time_ + per_right_step_shifts_av[right_index];
     };
 
-    // Partial seek: stop/drain/flush/reinit/seek/restart a single right video's pipeline,
-    // then drain frames until reaching the target position. Returns true if a frame was obtained.
-    auto partial_seek_right_video = [&](const Side& side, SideState& right_state, const int64_t effective_shift, const float target_position) -> bool {
+    // Restart one video's pipeline at a preceding keyframe. Shared decoding must
+    // be disabled before waiting for a right decoder's stop cascade.
+    auto seek_video_pipeline = [&](const Side& side, const float target_position) {
       // 0. Give this side its own decode.  The stop cascade awaited in step 2 is
       // propagated by the side's decoder thread, which stays parked for as long
       // as single_decoder_mode_ is set, so the wait would never complete.  A
       // partial seek always moves this right video off the left's position and
       // therefore cannot share the left's decoded frames anyway.
-      single_decoder_mode_ = false;
+      if (single_decoder_mode_.exchange(false)) {
+        // Dormant right demuxers still sit at the beginning of the file. Before
+        // consuming their own queues, align them with their displayed frames.
+        for (auto& pair : side_states) {
+          if (pair.first.is_right()) {
+            pair.second.pipeline_needs_realign_ = true;
+          }
+        }
+      }
 
       // 1. Stop the packet queue to halt demuxing for this side
       packet_queues_[side]->stop();
@@ -1179,11 +1191,15 @@ void VideoCompare::compare() {
       decoded_frame_queues_[side]->restart();
       filtered_frame_queues_[side]->restart();
       converted_frame_queues_[side]->restart();
+      side_states.at(side).pipeline_needs_realign_ = false;
+    };
+
+    // Decode from a keyframe to a raw PTS, retaining contiguous native history.
+    auto partial_seek_video = [&](const Side& side, SideState& right_state, const int64_t target_raw_pts, const int64_t effective_shift, const float target_position) -> bool {
+      seek_video_pipeline(side, target_position);
 
       // 7. Drain frames from keyframe to target, keeping up to frame_buffer_size_
       // frames so that subsequent backward steps can use the buffer instead of seeking.
-      const int64_t target_raw_pts = left.pts_ + effective_shift;
-
       AVFrameUniquePtr candidate{nullptr, avframe_deleter};
       std::deque<AVFrameUniquePtr> drain_frames;
 
@@ -1204,7 +1220,7 @@ void VideoCompare::compare() {
       if (!drain_frames.empty()) {
         // drain_frames[0] = target frame, [1] = one before target, etc.
         right_state.pts_ = drain_frames[0]->pts;
-        right_state.effective_time_shift_ = effective_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, drain_frames[0]->pts, true);
+        right_state.effective_time_shift_ = side.is_right() ? effective_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, drain_frames[0]->pts, true) : 0;
         right_state.pts_ -= right_state.effective_time_shift_;
         right_state.previous_decoded_picture_number_ = -1;
         right_state.decoded_picture_number_ = 1;
@@ -1214,6 +1230,7 @@ void VideoCompare::compare() {
         // aligned with the target, so any frames set aside by earlier backward
         // steps describe a position that no longer exists.
         right_state.frames_ = std::move(drain_frames);
+        right_state.frame_buffer_contiguous_ = true;
         right_state.stepped_back_frames_.clear();
 
         // Reset frame offset so display shows the new frame
@@ -1221,6 +1238,104 @@ void VideoCompare::compare() {
         return true;
       }
       return false;
+    };
+
+    auto partial_seek_right_video = [&](const Side& side, SideState& state, const int64_t effective_shift, const float target_position) {
+      return partial_seek_video(side, state, left.pts_ + effective_shift, effective_shift, target_position);
+    };
+
+    auto refresh_step_timing = [&](SideState& state) {
+      if (state.frames_.empty()) {
+        return;
+      }
+      const int64_t raw_pts = state.frames_.front()->pts;
+      state.effective_time_shift_ = state.side_.is_right()
+          ? compute_static_right_time_shift(state.side_.right_index()) + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, raw_pts, true)
+          : 0;
+      state.pts_ = raw_pts - state.effective_time_shift_;
+      state.frame_ = nullptr;
+      // A rewind is not a consecutive decoded frame duration sample.
+      state.previous_decoded_picture_number_ = -1;
+    };
+
+    // Rewind by decoded frame count, never by an estimated timestamp. The estimate
+    // only chooses where decoding starts; the last N frames before the current
+    // PTS decide the result, including for long GOPs and variable frame durations.
+    auto rewind_video = [&](SideState& state, const int count, const bool force_decode) {
+      if (state.frames_.empty() || count <= 0) {
+        return;
+      }
+      const int64_t current_pts = state.frames_.front()->pts;
+      if (!force_decode && state.frame_buffer_contiguous_ && static_cast<size_t>(count) < state.frames_.size()) {
+        for (int i = 0; i < count; ++i) {
+          state.stepped_back_frames_.push_front(std::move(state.frames_.front()));
+          state.frames_.pop_front();
+        }
+        return;
+      }
+      if (!force_decode && current_pts == state.first_pts_) {
+        return;
+      }
+
+      const int64_t first_pts = state.first_pts_ == INT64_MIN ? 0 : state.first_pts_;
+      int64_t lookback = playback_timing::normalized_delta(state.delta_pts_) * (static_cast<int64_t>(count) + 1);
+      for (;;) {
+        const int64_t start_pts = std::max(first_pts, current_pts - lookback);
+        seek_video_pipeline(state.side_, start_pts * AV_TIME_TO_SEC + state.start_time_);
+        std::deque<AVFrameUniquePtr> history;
+        AVFrameUniquePtr candidate{nullptr, avframe_deleter};
+        while (converted_frame_queues_[state.side_]->pop(candidate)) {
+          if (candidate->pts >= current_pts) {
+            break;
+          }
+          history.push_front(std::move(candidate));
+          if (history.size() > frame_buffer_size_ + static_cast<size_t>(count)) {
+            history.pop_back();
+          }
+        }
+        if (history.size() < static_cast<size_t>(count) && start_pts > first_pts) {
+          lookback = std::min(current_pts - first_pts, lookback * 2);
+          continue;
+        }
+
+        state.stepped_back_frames_.clear();
+        if (history.empty()) {
+          // At the start, keep the current frame and leave the pipeline after it.
+          break;
+        }
+        if (candidate != nullptr) {
+          state.stepped_back_frames_.push_back(std::move(candidate));
+        }
+        const size_t actual_count = std::min(static_cast<size_t>(count), history.size());
+        for (size_t i = 1; i < actual_count; ++i) {
+          state.stepped_back_frames_.push_front(std::move(history.front()));
+          history.pop_front();
+        }
+        while (history.size() > frame_buffer_size_) {
+          history.pop_back();
+        }
+        state.frames_ = std::move(history);
+        state.frame_buffer_contiguous_ = true;
+        break;
+      }
+    };
+
+    auto align_pending_pipeline = [&](SideState& state) {
+      if (!state.pipeline_needs_realign_ || state.frames_.empty()) {
+        return;
+      }
+      const int64_t current_pts = state.frames_.front()->pts;
+      // Rebuild the exact predecessor, then replay the current frame. Seeking
+      // straight to its PTS can land after leading B-frames of an open GOP.
+      rewind_video(state, 1, true);
+      if (state.frames_.front()->pts < current_pts && !state.stepped_back_frames_.empty()) {
+        if (state.frames_.size() >= frame_buffer_size_) {
+          state.frames_.pop_back();
+        }
+        state.frames_.push_front(std::move(state.stepped_back_frames_.front()));
+        state.stepped_back_frames_.pop_front();
+      }
+      refresh_step_timing(state);
     };
 
     int forward_navigate_frames = 0;
@@ -1341,10 +1456,6 @@ void VideoCompare::compare() {
 
       const int frame_navigation_delta = display_->get_frame_navigation_delta();
 
-      // Normalize delta values to a sane fallback so we can reuse them for seeks/time shifts.
-      const int64_t right_delta = playback_timing::normalized_delta(right_ptr->delta_pts_);
-      const int64_t left_or_right_delta = (left.delta_pts_ > 0) ? left.delta_pts_ : right_delta;
-
       // Positive delta means "decode N next frames" (shift+D).
       if (frame_navigation_delta > 0) {
         forward_navigate_frames += frame_navigation_delta;
@@ -1353,15 +1464,46 @@ void VideoCompare::compare() {
       float seek_relative = display_->get_seek_relative();
       bool seek_from_start = display_->get_seek_from_start();
 
-      // Negative delta means "seek backward by N frames" (shift+A) using average frame duration.
-      if (frame_navigation_delta < 0) {
-        seek_relative = playback_navigation::seek_relative_after_backward_navigation(seek_relative, frame_navigation_delta, left_or_right_delta);
-        seek_from_start = false;
-      }
-
       const int step_right_frames = display_->get_step_right_frames();
 
       bool skip_update = false;
+
+      // Commit the frame actually being browsed before any decode-level step.
+      if (frame_offset > 0 && (frame_navigation_delta != 0 || step_right_frames != 0 || display_->get_step_ref_frames() != 0)) {
+        const int browsed_offset = frame_offset;
+        for (auto& pair : side_states) {
+          auto& state = pair.second;
+          const int offset = std::min(browsed_offset, static_cast<int>(state.frames_.size()) - 1);
+          for (int i = 0; i < offset; ++i) {
+            state.stepped_back_frames_.push_front(std::move(state.frames_.front()));
+            state.frames_.pop_front();
+          }
+          if (!state.frame_buffer_contiguous_ && !state.frames_.empty()) {
+            // Rebuild missing native successors before stepping from a browsed PTS.
+            state.pipeline_needs_realign_ = true;
+            align_pending_pipeline(state);
+          }
+          refresh_step_timing(state);
+        }
+        frame_offset = 0;
+      }
+
+      if (frame_navigation_delta < 0) {
+        const int count = -frame_navigation_delta;
+        // If shared decoding has to split, reposition every pipeline, including
+        // the dormant right decoders, so replay cannot restart them at frame 0.
+        const bool split_decode = single_decoder_mode_ && std::any_of(side_states.begin(), side_states.end(), [&](const auto& pair) {
+          return !pair.second.frame_buffer_contiguous_ || pair.second.frames_.size() <= static_cast<size_t>(count);
+        });
+        for (auto& pair : side_states) {
+          rewind_video(pair.second, count, split_decode);
+          refresh_step_timing(pair.second);
+        }
+        frame_offset = 0;
+        forward_navigate_frames = 0;
+        skip_update = true;
+        timer_->reset();
+      }
 
       // Step (+/-) or re-level (Ctrl+0) one video against the left: the active
       // right video normally, the reference while Q is held.  Each keeps its
@@ -1380,6 +1522,9 @@ void VideoCompare::compare() {
           for (int i = 0; i < step_frames; i++) {
             AVFrameUniquePtr stepped_frame{nullptr, avframe_deleter};
 
+            if (target->stepped_back_frames_.empty()) {
+              align_pending_pipeline(*target);
+            }
             if (!target->stepped_back_frames_.empty()) {
               // Undo an earlier backward step from its set-aside frames.  The pipeline
               // still sits where that step left it, so its head is not the frame that
@@ -1460,89 +1605,23 @@ void VideoCompare::compare() {
 
         // --- backward stepping (- key) ---
         if (step_frames < 0 && !display_->get_play()) {
-          const int steps_back = -step_frames;  // positive count
-          const int buffered_frames = static_cast<int>(target->frames_.size()) - 1;  // frames available behind current
-
-          // Remember current front frame PTS to detect "didn't actually move"
-          const int64_t old_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_[0]->pts;
-
-          // Snapshot the offset so a step that turns out to be impossible can be
-          // taken back exactly.  Subtracting the requested amount would not do:
-          // the clamp below may commit less than was asked for.
-          const int64_t old_step_shift_av = per_right_step_shifts_av[step_index];
-
-          bool clamped_at_start = false;
-
-          if (steps_back <= buffered_frames) {
-            // Fast path: target frame is already in the buffer — no seek needed.
-            // Move the newest N frames aside; the target becomes frames_[0].  They
-            // are kept rather than dropped so that stepping forward again can hand
-            // them back: the pipeline is not rewound here, so its head is N frames
-            // beyond the one now displayed.
-            for (int i = 0; i < steps_back; i++) {
-              const int64_t leaving_pts = target->frames_[0]->pts;
-
-              target->stepped_back_frames_.push_front(std::move(target->frames_.front()));
-              target->frames_.pop_front();
-
-              // As on the way forward, move the offset by the exact distance between
-              // the frames rather than by the delta_pts_ average.
-              apply_right_step_offset(step_index, -1, leaving_pts - target->frames_[0]->pts);
-            }
-
-            // Recompute PTS and effective shift from the buffer frame now at front
-            const int64_t static_shift = compute_static_right_time_shift(step_index);
-            target->effective_time_shift_ = static_shift + playback_timing::calculate_dynamic_time_shift(time_shift_.multiplier, target->frames_[0]->pts, true);
-            target->pts_ = target->frames_[0]->pts - target->effective_time_shift_;
-
+          const int64_t old_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_.front()->pts;
+          rewind_video(*target, -step_frames, false);
+          const int64_t new_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_.front()->pts;
+          if (old_front_pts != INT64_MIN && new_front_pts != INT64_MIN) {
+            // Freeze the actual decoded distance, including irregular intervals
+            // and clamping at the first frame, into this video's own offset.
+            apply_right_step_offset(step_index, 1, new_front_pts - old_front_pts);
+            refresh_step_timing(*target);
             frame_offset = 0;
-          } else {
-            // Slow path: target is beyond the buffer — partial seek required.
-            apply_right_step_offset(step_index, step_frames, target_delta);  // negative
-
-            // A step reaching past the video's first frame cannot be honoured: the
-            // demuxer clamps there.  Reduce the offset to what is reachable, since
-            // the seek below derives pts_ from it and would otherwise place this
-            // side ahead of the frame it actually shows, leaving the sync pass to
-            // drag the LEFT video forward to a position that was never requested.
-            // The resulting target matches the clamp the full seek path applies.
-            if (target->first_pts_ > INT64_MIN) {
-              const int64_t reachable_shift = target->first_pts_ - left.pts_ - time_shift_offset_av_time_;
-
-              if (per_right_step_shifts_av[step_index] < reachable_shift) {
-                per_right_step_shifts_av[step_index] = reachable_shift;
-                clamped_at_start = true;
-              }
-            }
-
-            const int64_t effective_shift = compute_static_right_time_shift(step_index);
-            const float right_target_position = left.pts_ * AV_TIME_TO_SEC + target->start_time_ + effective_shift * AV_TIME_TO_SEC;
-            partial_seek_right_video(step_side, *target, effective_shift, right_target_position);
-          }
-
-          // Check if the step actually moved to a different frame
-          const int64_t new_front_pts = target->frames_.empty() ? INT64_MIN : target->frames_[0]->pts;
-
-          if (new_front_pts == old_front_pts) {
-            // Didn't move — put the offset back exactly as it was.
-            per_right_step_shifts_av[step_index] = old_step_shift_av;
-
-            // Only report "reached start" when the current frame is genuinely the
-            // first decoded frame of the video.  When the drain in
-            // partial_seek_right_video transiently fails to produce frames the PTS
-            // stays the same, but we are NOT necessarily at the start — suppress the
-            // misleading notification in that case.
-            if (target->first_pts_ > INT64_MIN && new_front_pts <= target->first_pts_) {
+            if (new_front_pts != old_front_pts) {
+              const int64_t total_offset = right_step_offset_in_frames(step_index, target_delta);
+              notify_step(string_sprintf("%s: %s%lld frames%s", name.c_str(),
+                  total_offset > 0 ? "+" : "", static_cast<long long>(total_offset),
+                  new_front_pts == target->first_pts_ ? " (reached start)" : ""));
+            } else if (new_front_pts == target->first_pts_) {
               notify_step(string_sprintf("%s: reached start of video", name.c_str()));
             }
-          } else {
-            // Notify user with current offset
-            const int64_t total_offset = right_step_offset_in_frames(step_index, target_delta);
-            notify_step(string_sprintf("%s: %s%lld frames%s",
-              name.c_str(),
-              total_offset > 0 ? "+" : "",
-              static_cast<long long>(total_offset),
-              clamped_at_start ? " (reached start)" : ""));
           }
 
           skip_update = true;
@@ -1786,6 +1865,8 @@ void VideoCompare::compare() {
             side_state.decoded_picture_number_ = 1;
 
             side_state.frames_.clear();
+            side_state.frame_buffer_contiguous_ = true;
+            side_state.pipeline_needs_realign_ = false;
             side_state.stepped_back_frames_.clear();
           } else {
 #ifdef _DEBUG
@@ -1844,6 +1925,7 @@ void VideoCompare::compare() {
           return true;
         }
 
+        align_pending_pipeline(side_state);
         const bool result = converted_frame_queues_[side_state.side_]->pop(side_state.frame_);
 
         if (result) {
@@ -1861,10 +1943,9 @@ void VideoCompare::compare() {
       };
 
       // Sync left with all right videos.
-      // Only sync when actively consuming frames (playing or frame-navigating).
-      // During pause, any tiny PTS mismatch from stepping/seeking would cause
-      // unwanted frame pops that visually advance the wrong video.
-      if (fetch_next_frame) {
+      // Native frame steps must consume exactly one frame per video, even when
+      // frame rates differ. Timestamp synchronization belongs to playback.
+      if (fetch_next_frame && !skip_update && !paused_forward_step) {
         for (auto& pair : side_states) {
           if (pair.first.is_right()) {
             SideState& right_state = pair.second;
@@ -1985,6 +2066,9 @@ void VideoCompare::compare() {
           frames.push_front(std::move(frame));
         } else if (frame != nullptr) {
           if (!frames.empty()) {
+            if (frame->pts != frames.front()->pts) {
+              side_state.frame_buffer_contiguous_ = false;
+            }
             frames.front() = std::move(frame);
           } else {
             frames.push_front(std::move(frame));
@@ -2113,8 +2197,7 @@ void VideoCompare::compare() {
               display_->set_all_right_frames(all_right_frames);
             }
 
-            // A partial seek of the reference never happens, but its buffer can still
-            // run short of the others' at the very start or end of the video.
+            // The reference buffer can run short of the others' at the start or end.
             const AVFrame* ref_display_frame = nullptr;
             if (ref_ptr != nullptr && frame_offset < static_cast<int>(ref_ptr->frames_.size())) {
               ref_display_frame = ref_ptr->frames_[frame_offset].get();

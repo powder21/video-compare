@@ -161,6 +161,14 @@ integration: $(integration_bin)
 	$$wrap ./$(integration_bin) multi-right-sync "$$media/multi_sync_left_30.mp4" "$$media/multi_sync_right0_25.mp4" "$$media/multi_sync_right1_25.mp4"; \
 	echo "Running $(integration_bin) frame-navigation"; \
 	$$wrap ./$(integration_bin) frame-navigation "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4"; \
+	echo "Running $(integration_bin) frame-stepping (long GOP and B-frames)"; \
+	$$wrap ./$(integration_bin) frame-stepping "$$media/step_gop_25.mp4" "$$media/step_gop_right_25.mp4" "$$media/step_gop_25.mp4" "$$media/step_gop_right_25.mp4"; \
+	echo "Running $(integration_bin) frame-stepping (single decoder)"; \
+	$$wrap ./$(integration_bin) frame-stepping "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4"; \
+	echo "Running $(integration_bin) frame-stepping-vfr"; \
+	$$wrap ./$(integration_bin) frame-stepping-vfr "$$media/step_vfr.mp4" "$$media/step_vfr_right.mp4" "$$media/step_vfr.mp4" "$$media/step_vfr_right.mp4"; \
+	echo "Running $(integration_bin) shared-frame-stepping"; \
+	$$wrap ./$(integration_bin) shared-frame-stepping "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4" "$$media/step_gop_25.mp4"; \
 	echo "Running $(integration_bin) buffer-forward-only"; \
 	$$wrap ./$(integration_bin) buffer-forward-only "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4"; \
 	echo "Running $(integration_bin) buffer-pingpong"; \

@@ -1,11 +1,8 @@
 #include "playback_navigation.h"
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
 static int failures = 0;
-
-static constexpr float kSeekTol = 1e-5F;
 
 static void expect_i(const char* label, const int got, const int expected) {
   if (got != expected) {
@@ -25,15 +22,6 @@ static void expect_bool(const char* label, const bool got, const bool expected) 
   std::printf("PASS %s -> %s\n", label, got ? "true" : "false");
 }
 
-static void expect_near(const char* label, const float got, const float expected) {
-  if (!(std::fabs(got - expected) <= kSeekTol)) {
-    std::fprintf(stderr, "FAIL %s: expected %.8g, got %.8g\n", label, static_cast<double>(expected), static_cast<double>(got));
-    failures++;
-    return;
-  }
-  std::printf("PASS %s -> %.8g\n", label, static_cast<double>(got));
-}
-
 static void expect_ping_pong(const char* label, const int offset, const int last, const bool forward, const int expected_offset, const bool expected_forward) {
   const playback_navigation::PingPongStep step = playback_navigation::next_ping_pong_step(offset, last, forward);
   if (step.offset != expected_offset || step.forward != expected_forward) {
@@ -47,11 +35,6 @@ static void expect_ping_pong(const char* label, const int offset, const int last
 int main() {
   using playback_navigation::adjusted_frame_offset;
   using playback_navigation::next_forward_only_offset;
-  using playback_navigation::seek_relative_after_backward_navigation;
-
-  expect_near("nav -1 of 40000 us", seek_relative_after_backward_navigation(0.0F, -1, 40000), -0.04F);
-  expect_near("nav -2 of 33333 us from 0.25", seek_relative_after_backward_navigation(0.25F, -2, 33333), 0.183334F);
-  expect_near("nav 0 leaves seek_relative", seek_relative_after_backward_navigation(0.25F, 0, 40000), 0.25F);
 
   expect_i("forward-only last=5 offset=0 wraps", next_forward_only_offset(0, 5), 5);
   expect_i("forward-only last=5 offset=5 steps", next_forward_only_offset(5, 5), 4);
