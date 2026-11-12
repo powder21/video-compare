@@ -3,12 +3,20 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
-## Unreleased
+## v1.8.1 — 2026-11-12
 
+- **Chinese documentation in every build download.** Windows, macOS, and Linux
+  artifacts ship the Chinese guide as `README.md`, alongside `keyboard-zh.svg`
+  and `CHANGELOG.md`. The keyboard image and changelog work offline, and the
+  English-guide link points to the source commit. Windows release ZIPs include
+  the same documentation.
 - Frame-stepping integration tests wait for coherent, completed presentation
   checkpoints instead of fixed 250/700 ms delays. This prevents slow macOS and
   Windows runners from checking playback before it starts or a frame batch
   before it finishes. Exact frame, offset, and boundary assertions remain strict.
+- Diagnostic environment flags are read through SDL so changes made by the
+  test harness are visible on Windows. Linux, macOS, and Windows now pass the
+  complete build, unit-test, and integration-test workflows.
 
 ## v1.8.0 — 2026-11-12
 
