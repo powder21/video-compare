@@ -32,7 +32,7 @@
 ### macOS / Linux — 从源码编译
 
 ```sh
-git clone https://github.com/powder21/video-compare.git
+git clone <本仓库地址> video-compare
 cd video-compare
 git checkout v1.8.2
 ./install.sh
@@ -68,7 +68,7 @@ apt/dnf 命令)之后 `make -j4 && make install` 即可。
 
 ### 构建产物
 
-[Actions](https://github.com/powder21/video-compare/actions) 页面每次提交都会产出三个平台的构建。
+仓库的 GitHub Actions 每次提交都会产出三个平台的构建。
 
 从 **v1.8.1** 起,下载包内的 `README.md` 默认为本中文说明,同时附上 `keyboard-zh.svg` 中文键盘图和
 `CHANGELOG.md` 变更记录。解压后保持三个文件在同一目录,即可离线查看说明、图片和版本历史。
