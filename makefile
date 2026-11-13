@@ -201,6 +201,8 @@ integration: $(integration_bin)
 	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
 	echo "Running $(integration_bin) ref-step (single decoder)"; \
 	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
+	echo "Running $(integration_bin) ref-screenshot"; \
+	$$wrap ./$(integration_bin) ref-screenshot "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/ref_bars_25.mp4"; \
 	echo "Running $(integration_bin) corrupt-input"; \
 	$$wrap ./$(integration_bin) corrupt-input "$$media/seek_left_25.mp4" "$$media/corrupt_right_25.mp4"
 

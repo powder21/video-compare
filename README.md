@@ -188,6 +188,10 @@ the active right video again. The reference keeps an offset of its own through s
 `Shift+Q` does the same without holding a key: each press switches between the reference and left/right, and
 a plain `Q` press and release also returns to left/right.
 
+Screenshots include the reference whether or not it is shown. `F` saves its current frame as `<stem>_NNNN.png`
+beside the left and right frames (with a `_ref` suffix if its stem matches theirs). The `Shift+F` crop preview
+puts it leftmost as `Ref`, ahead of `L` and `R1`…, and `Shift+Enter` also saves `<stem>_ref_cutout_NNNN.png`.
+
 The above features can be combined in any order, of course. Launch `video-compare` without any arguments to
 see all supported options.
 
@@ -236,7 +240,7 @@ see all supported options.
 
 - `P`: Print mouse position and pixel value under cursor to console
 - `M`: Print image similarity metrics to console
-- `F`: Save both frames and the on-screen content as PNG images
+- `F`: Save both frames and the on-screen content as PNG images, plus the reference frame with `--ref`
 - `I`: Toggle fast/high-quality resizing for input alignment
 - `T`: Toggle nearest-neighbor/bilinear video texture filtering
 - `Y`: Cycle through subtraction modes
@@ -259,7 +263,7 @@ see all supported options.
 - `Shift+A`: Step all videos back one frame; decode from an earlier keyframe when history is exhausted
 - `Shift+M`: Cycle display mode
 - `Shift+S`: Cycle aspect view mode
-- `Shift+F`: Select a region and open a crop preview; in the preview, `4` zooms to 1:1 pixels, `6` to 100%, `R` fits the window, `Enter` saves the concatenation and `Shift+Enter` saves every cutout
+- `Shift+F`: Select a region and open a crop preview; in the preview, `4` zooms to 1:1 pixels, `6` to 100%, `R` fits the window, `Enter` saves the concatenation and `Shift+Enter` saves every cutout; with `--ref` the reference is the leftmost panel
 - `Shift+X`: Print display state to console
 - `Shift+W`: Restore saved window size
 - `Ctrl+W`: Restore startup window size

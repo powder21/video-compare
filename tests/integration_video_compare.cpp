@@ -27,7 +27,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, FrameStepping, FrameSteppingVfr, SharedFrameStepping, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay, RefStep, CorruptInput };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, FrameStepping, FrameSteppingVfr, SharedFrameStepping, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay, RefStep, CorruptInput, RefScreenshot };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -93,6 +93,8 @@ const char* scenario_name(const Scenario scenario) {
       return "right-step-edges";
     case Scenario::CorruptInput:
       return "corrupt-input";
+    case Scenario::RefScreenshot:
+      return "ref-screenshot";
   }
   return "unknown";
 }
@@ -629,6 +631,21 @@ bool file_is_non_empty(const char* path) {
   return stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
+std::string read_file(const char* path) {
+  std::FILE* file = std::fopen(path, "rb");
+  if (file == nullptr) {
+    return std::string();
+  }
+  std::string contents;
+  char buffer[4096];
+  size_t n;
+  while ((n = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    contents.append(buffer, n);
+  }
+  std::fclose(file);
+  return contents;
+}
+
 std::string resolve_path(const std::string& path) {
 #if defined(_WIN32)
   char resolved[_MAX_PATH];
@@ -676,9 +693,10 @@ struct DumpDirectory {
     }
   }
 
+  std::vector<std::string> names;
+
   ~DumpDirectory() {
-    const char* names[] = {"screenshot_1_0001.png", "screenshot_2_0001.png", "screenshot_1_screenshot_2_osd_0001.png"};
-    for (const char* name : names) {
+    for (const std::string& name : names) {
       unlink((path + "/" + name).c_str());
     }
     if (::chdir(previous.c_str()) != 0) {
@@ -1289,6 +1307,17 @@ void run_event_script_body(const Scenario scenario, CapturedOutput& captured_out
     sleep_ms(700);
     push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
     sleep_ms(400);
+  } else if (scenario == Scenario::RefScreenshot) {
+    // F saves the reference beside left/right; Shift+F puts it first in the crop preview.
+    // Enter would open the native folder picker, so the preview is only cancelled.
+    push_keydown(SDLK_SPACE, SDL_SCANCODE_SPACE, 0);
+    sleep_ms(400);
+    push_keydown(SDLK_f, SDL_SCANCODE_F, 0);
+    sleep_ms(600);
+    push_crop_gesture(SDLK_f, SDL_SCANCODE_F, 20, 20, 140, 100);
+    sleep_ms(700);
+    push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
+    sleep_ms(400);
   } else if (scenario == Scenario::CorruptInput) {
     // Frames 30-59 of the right clip cannot be split into NAL units. Playback must skip them and reach the clean tail.
     FrameProbe probe(captured_out, checkpoints, false);
@@ -1407,6 +1436,14 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       file = resolve_path(file);
     }
     dump_directory.reset(new DumpDirectory("vc-still-seek-"));
+    dump_directory->names = {"screenshot_1_0001.png", "screenshot_2_0001.png", "screenshot_1_screenshot_2_osd_0001.png"};
+  }
+  if (scenario == Scenario::RefScreenshot) {
+    for (std::string& file : resolved) {
+      file = resolve_path(file);
+    }
+    dump_directory.reset(new DumpDirectory("vc-ref-screenshot-"));
+    dump_directory->names = {"seek_left_25_0001.png", "seek_right_25_0001.png", "ref_bars_25_0001.png", "seek_left_25_seek_right_25_osd_0001.png"};
   }
 
   for (const std::string& file : resolved) {
@@ -1416,7 +1453,7 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
   prepare_dummy_software_sdl();
   reset_helper_counters();
 
-  const bool with_ref = scenario == Scenario::RefOverlay || scenario == Scenario::RefStep || scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr || scenario == Scenario::SharedFrameStepping;
+  const bool with_ref = scenario == Scenario::RefOverlay || scenario == Scenario::RefStep || scenario == Scenario::RefScreenshot || scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr || scenario == Scenario::SharedFrameStepping;
   VideoCompareConfig config = make_config(with_ref ? std::vector<std::string>(resolved.begin(), resolved.end() - 1) : resolved);
   if (with_ref) {
     config.has_ref_video = true;
@@ -1547,6 +1584,25 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
       } else {
         exit_code = EXIT_FAILURE;
       }
+    }
+  } else if (scenario == Scenario::RefScreenshot) {
+    const char* saved = "Saved ref_bars_25_0001.png, seek_left_25_0001.png, seek_right_25_0001.png and seek_left_25_seek_right_25_osd_0001.png";
+    const std::string ref_png = read_file("ref_bars_25_0001.png");
+    const std::string left_png = read_file("seek_left_25_0001.png");
+    if (output.find(saved) == std::string::npos) {
+      std::fprintf(stderr, "FAIL ref-screenshot: F did not report saving the reference frame\ncaptured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else if (ref_png.empty() || left_png.empty()) {
+      std::fprintf(stderr, "FAIL ref-screenshot: reference or left PNG missing or empty\n");
+      exit_code = EXIT_FAILURE;
+    } else if (ref_png == left_png) {
+      std::fprintf(stderr, "FAIL ref-screenshot: reference PNG holds the left frame\n");
+      exit_code = EXIT_FAILURE;
+    } else if (output.find("Crop preview: 120x80 at 20,20 with ref") == std::string::npos) {
+      std::fprintf(stderr, "FAIL ref-screenshot: crop preview did not include the reference\ncaptured stdout:\n%s\n", output.c_str());
+      exit_code = EXIT_FAILURE;
+    } else {
+      std::printf("PASS ref-screenshot: F saved the reference frame and the crop preview included it\n");
     }
   } else if (scenario == Scenario::SyncMismatch) {
     // Clipboard is left PTS only. A mid-clip timestamp after unpaused 25/30
@@ -2351,6 +2407,7 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s ref-overlay LEFT RIGHT REF\n", argv0);
   std::fprintf(stderr, "  %s ref-step LEFT RIGHT REF\n", argv0);
   std::fprintf(stderr, "  %s corrupt-input LEFT CORRUPT_RIGHT\n", argv0);
+  std::fprintf(stderr, "  %s ref-screenshot LEFT RIGHT REF\n", argv0);
 }
 
 }  // namespace
@@ -2381,6 +2438,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::EventInjection, files);
+    }
+    if (name == "ref-screenshot") {
+      if (files.size() != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::RefScreenshot, files);
     }
     if (name == "corrupt-input") {
       if (files.size() != 2) {

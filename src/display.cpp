@@ -943,6 +943,7 @@ void Display::rebuild_side_ui_textures() {
     SDL_DestroyTexture(ref_ui_.text_texture);
     ref_ui_.text_texture = nullptr;
   }
+  ref_ui_.file_stem = strip_ffmpeg_patterns(get_file_stem(ref_file_name_));
   if (!ref_file_name_.empty()) {
     SDL_Surface* text_surface = render_text_with_fallback("Ref: " + ref_file_name_);
     ref_ui_.text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
@@ -1530,7 +1531,7 @@ void write_png(const AVFrame* frame, const std::string& filename, std::atomic_bo
   }
 };
 
-void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame) {
+void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame, const AVFrame* ref_frame) {
   std::atomic_bool error_occurred(false);
 
   const auto create_onscreen_display_avframe = [&]() -> AVFramePtr {
@@ -1579,18 +1580,32 @@ void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_
   const std::string right_filename = string_sprintf("%s%s%s_%04d.png", save_dir_.c_str(), right_stem.c_str(), stems_equal ? "_right" : "", saved_image_number_);
   const std::string osd_filename = string_sprintf("%s%s_%s_osd_%04d.png", save_dir_.c_str(), left_stem.c_str(), right_stem.c_str(), saved_image_number_);
 
+  // A reference stepped on its own can hold fewer buffered frames than left/right, so the browsed one may be missing
+  const bool save_ref = ref_frame != nullptr && !ref_file_name_.empty();
+  const std::string& ref_stem = ref_ui_.file_stem;
+  const bool ref_stem_taken = (ref_stem == left_stem) || (ref_stem == right_stem);
+  const std::string ref_filename = save_ref ? string_sprintf("%s%s%s_%04d.png", save_dir_.c_str(), ref_stem.c_str(), ref_stem_taken ? "_ref" : "", saved_image_number_) : std::string();
+
   auto save_frame = [&](const AVFrame* frame, const std::string& filename) { return write_png(frame, filename, error_occurred); };
 
-  std::thread save_left_frame_thread(save_frame, left_frame, left_filename);
-  std::thread save_right_frame_thread(save_frame, right_frame, right_filename);
-  std::thread save_osd_frame_thread(save_frame, osd_frame.get(), osd_filename);
+  std::vector<std::thread> save_threads;
+  if (save_ref) {
+    save_threads.emplace_back(save_frame, ref_frame, ref_filename);
+  }
+  save_threads.emplace_back(save_frame, left_frame, left_filename);
+  save_threads.emplace_back(save_frame, right_frame, right_filename);
+  save_threads.emplace_back(save_frame, osd_frame.get(), osd_filename);
 
-  save_left_frame_thread.join();
-  save_right_frame_thread.join();
-  save_osd_frame_thread.join();
+  for (auto& t : save_threads) {
+    t.join();
+  }
 
   if (!error_occurred) {
-    notify_user(string_sprintf("Saved %s, %s and %s", left_filename.c_str(), right_filename.c_str(), osd_filename.c_str()));
+    if (save_ref) {
+      notify_user(string_sprintf("Saved %s, %s, %s and %s", ref_filename.c_str(), left_filename.c_str(), right_filename.c_str(), osd_filename.c_str()));
+    } else {
+      notify_user(string_sprintf("Saved %s, %s and %s", left_filename.c_str(), right_filename.c_str(), osd_filename.c_str()));
+    }
 
     saved_image_number_++;
   }
@@ -3009,12 +3024,12 @@ bool Display::possibly_refresh(const AVFrame* input_left_frame, const AVFrame* i
   }
 
   if (save_image_frames_) {
-    save_image_frames(input_left_frame, input_right_frame);
+    save_image_frames(input_left_frame, input_right_frame, ref_frame);
     save_image_frames_ = false;
   }
 
   if (save_selected_area_ && selection_state_ == SelectionState::Completed) {
-    enter_crop_preview(input_left_frame);
+    enter_crop_preview(input_left_frame, ref_frame);
     selection_state_ = SelectionState::None;
     save_selected_area_ = false;
 
@@ -3324,7 +3339,7 @@ void Display::handle_event(const SDL_Event& event) {
           case SDLK_RETURN:
           case SDLK_KP_ENTER: {
             // Confirm: prompt for save directory, then save.
-            // Shift+Enter saves N+2 images (left + N right + concat).
+            // Shift+Enter saves N+2 images (left + N right + concat), plus the reference if there is one.
             // Plain Enter saves just the concat image.
             // If the user cancels the directory picker, stay in preview
             // so their selection isn't lost.
@@ -4226,7 +4241,7 @@ bool Display::prompt_and_update_save_dir() {
   return true;
 }
 
-void Display::enter_crop_preview(const AVFrame* left_frame) {
+void Display::enter_crop_preview(const AVFrame* left_frame, const AVFrame* ref_frame) {
   const SDL_Rect selection_rect = get_left_selection_rect();
 
   if (selection_rect.w <= 0 || selection_rect.h <= 0) {
@@ -4270,39 +4285,56 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
     return;
   }
 
+  // Copy the selection out of a source frame into dest, starting at panel x_offset
+  auto copy_selection = [&](AVFrame* dest, const int x_offset, const AVFrame* source_frame) {
+    for (int y = 0; y < selection_rect.h; y++) {
+      const int src_y = selection_rect.y + y;
+      memcpy(dest->data[0] + y * dest->linesize[0] + x_offset * pixel_size,
+             source_frame->data[0] + src_y * source_frame->linesize[0] + selection_rect.x * pixel_size,
+             selection_rect.w * pixel_size);
+    }
+  };
+
+  auto create_cutout = [&](const AVFrame* source_frame) -> AVFrame* {
+    AVFrame* cutout = create_frame(selection_rect.w, selection_rect.h, source_frame);
+    if (cutout) {
+      copy_selection(cutout, 0, source_frame);
+    }
+    return cutout;
+  };
+
+  // The reference goes first; after stepping on its own it may have no frame at the browsed offset
+  const bool with_ref = ref_frame != nullptr && !ref_file_name_.empty();
+  if (with_ref) {
+    crop_preview_data_.ref_cutout = create_cutout(ref_frame);
+    if (!crop_preview_data_.ref_cutout) {
+      std::cerr << "Failed to allocate reference cutout frame." << std::endl;
+      destroy_crop_preview();
+      return;
+    }
+  }
+
   // Create left cutout
-  crop_preview_data_.left_cutout = create_frame(selection_rect.w, selection_rect.h, left_frame);
+  crop_preview_data_.left_cutout = create_cutout(left_frame);
   if (!crop_preview_data_.left_cutout) {
     std::cerr << "Failed to allocate left cutout frame." << std::endl;
     destroy_crop_preview();
     return;
   }
-  for (int y = 0; y < selection_rect.h; y++) {
-    const int src_y = selection_rect.y + y;
-    memcpy(crop_preview_data_.left_cutout->data[0] + y * crop_preview_data_.left_cutout->linesize[0],
-           left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size,
-           selection_rect.w * pixel_size);
-  }
 
   // Create individual right cutouts
   for (const auto* right_frame : valid_right_frames) {
-    AVFrame* cutout = create_frame(selection_rect.w, selection_rect.h, right_frame);
+    AVFrame* cutout = create_cutout(right_frame);
     if (!cutout) {
       std::cerr << "Failed to allocate cutout frame." << std::endl;
       destroy_crop_preview();
       return;
     }
-    for (int y = 0; y < selection_rect.h; y++) {
-      const int src_y = selection_rect.y + y;
-      memcpy(cutout->data[0] + y * cutout->linesize[0],
-             right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size,
-             selection_rect.w * pixel_size);
-    }
     crop_preview_data_.right_cutouts.push_back(cutout);
   }
 
-  // Create concatenated frame: [left | right0 | right1 | ... | rightN-1]
-  const int num_panels = 1 + static_cast<int>(valid_right_frames.size());
+  // Create concatenated frame: [ref | left | right0 | right1 | ... | rightN-1]
+  const int num_panels = crop_preview_data_.num_panels();
   const int concat_width = selection_rect.w * num_panels;
   crop_preview_data_.concatenated = create_frame(concat_width, selection_rect.h, left_frame);
   if (!crop_preview_data_.concatenated) {
@@ -4311,23 +4343,13 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
     return;
   }
 
-  // Copy left panel
-  for (int y = 0; y < selection_rect.h; y++) {
-    const int src_y = selection_rect.y + y;
-    memcpy(crop_preview_data_.concatenated->data[0] + y * crop_preview_data_.concatenated->linesize[0],
-           left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size,
-           selection_rect.w * pixel_size);
+  int panel = 0;
+  if (with_ref) {
+    copy_selection(crop_preview_data_.concatenated, (panel++) * selection_rect.w, ref_frame);
   }
-
-  // Copy right panels
-  for (size_t i = 0; i < valid_right_frames.size(); i++) {
-    const int x_offset = static_cast<int>(i + 1) * selection_rect.w;
-    for (int y = 0; y < selection_rect.h; y++) {
-      const int src_y = selection_rect.y + y;
-      memcpy(crop_preview_data_.concatenated->data[0] + y * crop_preview_data_.concatenated->linesize[0] + x_offset * pixel_size,
-             valid_right_frames[i]->data[0] + src_y * valid_right_frames[i]->linesize[0] + selection_rect.x * pixel_size,
-             selection_rect.w * pixel_size);
-    }
+  copy_selection(crop_preview_data_.concatenated, (panel++) * selection_rect.w, left_frame);
+  for (const auto* right_frame : valid_right_frames) {
+    copy_selection(crop_preview_data_.concatenated, (panel++) * selection_rect.w, right_frame);
   }
 
   // Create SDL texture from concatenated frame
@@ -4382,7 +4404,7 @@ void Display::enter_crop_preview(const AVFrame* left_frame) {
   // Pause playback while previewing
   play_ = false;
 
-  std::cout << string_sprintf("Crop preview: %dx%d at %d,%d", selection_rect.w, selection_rect.h, selection_rect.x, selection_rect.y) << std::endl;
+  std::cout << string_sprintf("Crop preview: %dx%d at %d,%d", selection_rect.w, selection_rect.h, selection_rect.x, selection_rect.y) << (with_ref ? " with ref" : "") << std::endl;
 }
 
 // Scale that fits the whole preview in the window, with a margin
@@ -4428,7 +4450,7 @@ void Display::render_crop_preview() {
     SDL_RenderCopyF(renderer_, crop_preview_texture_, nullptr, &dst);
 
     // Draw thin vertical separator lines between panels
-    const int num_panels = 1 + static_cast<int>(crop_preview_data_.right_cutouts.size());
+    const int num_panels = crop_preview_data_.num_panels();
     if (num_panels > 1) {
       SDL_SetRenderDrawColor(renderer_, 200, 200, 200, 128);
       SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
@@ -4440,7 +4462,7 @@ void Display::render_crop_preview() {
       SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
     }
 
-    // Render panel labels (L, R1, R2, ...) below the preview
+    // Render panel labels ([Ref,] L, R1, R2, ...) below the preview
     {
       const float panel_pixel_width = static_cast<float>(crop_preview_width_) / static_cast<float>(num_panels);
 
@@ -4462,9 +4484,13 @@ void Display::render_crop_preview() {
         SDL_FreeSurface(label_surface);
       };
 
-      render_panel_label(0, "L");
-      for (int i = 0; i < num_panels - 1; i++) {
-        render_panel_label(i + 1, string_sprintf("R%d", i + 1));
+      int panel = 0;
+      if (crop_preview_data_.ref_cutout) {
+        render_panel_label(panel++, "Ref");
+      }
+      render_panel_label(panel++, "L");
+      for (size_t i = 0; i < crop_preview_data_.right_cutouts.size(); i++) {
+        render_panel_label(panel++, string_sprintf("R%zu", i + 1));
       }
     }
   }
@@ -4571,6 +4597,7 @@ void Display::save_crop_preview_images(const bool save_all) {
   const std::string concat_filename = string_sprintf("%s%s_%s_cutout_concat_%04d.png", save_dir_.c_str(), ts.c_str(), left_stem.c_str(), num);
 
   // Per-side filenames are only built when saving everything.
+  std::string ref_filename;
   std::string left_filename;
   std::vector<std::string> right_filenames;
 
@@ -4614,6 +4641,11 @@ void Display::save_crop_preview_images(const bool save_all) {
         right_filenames.push_back(string_sprintf("%s%s_%s_right%zu_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), stem.c_str(), orig_idx + 1, num));
       }
     }
+
+    if (crop_preview_data_.ref_cutout) {
+      const std::string ref_stem = strip_ffmpeg_patterns(get_file_stem(ref_file_name_));
+      ref_filename = string_sprintf("%s%s_%s_ref_cutout_%04d.png", save_dir_.c_str(), ts.c_str(), ref_stem.c_str(), num);
+    }
   }
 
   // Save requested images in parallel using threads
@@ -4623,6 +4655,9 @@ void Display::save_crop_preview_images(const bool save_all) {
   save_threads.emplace_back(save_frame, crop_preview_data_.concatenated, concat_filename);
 
   if (save_all) {
+    if (crop_preview_data_.ref_cutout) {
+      save_threads.emplace_back(save_frame, crop_preview_data_.ref_cutout, ref_filename);
+    }
     if (crop_preview_data_.left_cutout) {
       save_threads.emplace_back(save_frame, crop_preview_data_.left_cutout, left_filename);
     }
@@ -4640,11 +4675,17 @@ void Display::save_crop_preview_images(const bool save_all) {
     // Build notification message
     std::string message;
     if (save_all) {
-      std::string saved_files = concat_filename + ", " + left_filename;
+      std::string saved_files = concat_filename;
+      size_t num_saved = 2 + right_filenames.size();
+      if (!ref_filename.empty()) {
+        saved_files += ", " + ref_filename;
+        num_saved++;
+      }
+      saved_files += ", " + left_filename;
       for (const auto& fn : right_filenames) {
         saved_files += ", " + fn;
       }
-      message = string_sprintf("Saved %zu images: %s", right_filenames.size() + 2, saved_files.c_str());
+      message = string_sprintf("Saved %zu images: %s", num_saved, saved_files.c_str());
     } else {
       message = string_sprintf("Saved concat image: %s", concat_filename.c_str());
     }

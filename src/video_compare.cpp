@@ -2204,7 +2204,7 @@ void VideoCompare::compare() {
               display_->set_all_right_frames(all_right_frames);
             }
 
-            // The reference buffer can run short of the others' at the start or end.
+            // Stepping the reference on its own can leave it fewer buffered frames than the others until playback refills them.
             const AVFrame* ref_display_frame = nullptr;
             if (ref_ptr != nullptr && frame_offset < static_cast<int>(ref_ptr->frames_.size())) {
               ref_display_frame = ref_ptr->frames_[frame_offset].get();

@@ -3,8 +3,15 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
-## Unreleased
+## v1.8.2 — 2026-11-13
 
+- **Screenshots include the reference video.** With `--ref`, `F` saves the
+  reference's current frame beside the left and right frames, whether or not
+  it is being shown (with a `_ref` suffix when its file stem matches theirs).
+  The `Shift+F` crop preview puts the reference in the leftmost panel, labeled
+  `Ref`, so the saved concatenation reads reference, left, right 1, …; and
+  `Shift+Enter` also saves `<stem>_ref_cutout_NNNN.png`. A new `ref-screenshot`
+  integration test checks both.
 - **Network inputs survive dropped connections.** Servers close connections a
   paused player stops reading from, which with large, high-bitrate files left a
   half-read packet that ended the program with `Invalid data found when

@@ -65,6 +65,12 @@ generate_clip "$out_dir/crop_right1_320.mp4" 1 25 320x180
 generate_clip "$out_dir/crop_right2_160.mp4" 1 25 160x90
 generate_clip "$out_dir/dynamic_left_43.mp4" 1 25 320x240
 generate_clip "$out_dir/dynamic_right_169.mp4" 1 25 640x360
+# A reference that looks different from the testsrc clips, so a saved
+# reference PNG cannot be mistaken for the left or right frame.
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'smptebars=size=320x180:rate=25:duration=4' \
+  -pix_fmt yuv420p -c:v mpeg4 -q:v 5 -g 1 \
+  "$out_dir/ref_bars_25.mp4"
 # H.264 with every packet in frames 30-59 claiming a first NAL longer than the
 # packet, like a read cut off mid-packet: the decoder rejects them as invalid data.
 ffmpeg -hide_banner -loglevel error -y \

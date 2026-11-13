@@ -334,11 +334,17 @@ class Display {
 
   // Stored cropped frames for deferred saving
   struct CropPreviewData {
+    AVFrame* ref_cutout{nullptr};           // reference video cutout, if any
     AVFrame* left_cutout{nullptr};          // left video cutout
     std::vector<AVFrame*> right_cutouts;    // N individual right cutouts
-    AVFrame* concatenated{nullptr};         // left + all rights side-by-side
+    AVFrame* concatenated{nullptr};         // [ref +] left + all rights side-by-side
+
+    int num_panels() const { return (ref_cutout ? 2 : 1) + static_cast<int>(right_cutouts.size()); }
 
     void free_all() {
+      if (ref_cutout) {
+        av_frame_free(&ref_cutout);
+      }
       if (left_cutout) {
         av_frame_free(&left_cutout);
       }
@@ -468,7 +474,7 @@ class Display {
                                  const int width_right,
                                  const float diff_max) const;
 
-  void save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame);
+  void save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame, const AVFrame* ref_frame);
 
   inline int static round(const float value) { return static_cast<int>(std::round(value)); }
 
@@ -521,7 +527,7 @@ class Display {
   void possibly_apply_crop();
   void commit_crop_selection_for_copy();
 
-  void enter_crop_preview(const AVFrame* left_frame);
+  void enter_crop_preview(const AVFrame* left_frame, const AVFrame* ref_frame);
   void render_crop_preview();
   float crop_preview_fit_scale() const;
   void set_crop_preview_scale(float scale);
