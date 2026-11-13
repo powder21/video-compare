@@ -90,7 +90,13 @@ video-compare a.mp4 b.mp4 c.mp4               # 一个左视频对多个右视�
 video-compare --ref src.mp4 a.mp4 b.mp4       # 额外带一个参照视频,按住 Q 时盖住左右两侧
 video-compare -w 1280x left.mp4 right.mp4     # 指定窗口宽度
 video-compare -m vstack left.mp4 right.mp4    # 上下堆叠而非左右分割
+video-compare https://host/a.mp4 b.mp4        # 也能直接打开 http/https 地址,断线后自动续传
 ```
+
+在线视频建议先下载到本地再对比:本地读取不会断流,拖动和逐帧也更快。直接打开 `http://` / `https://` 地址时,
+程序自动打开 FFmpeg 的断线重连(`reconnect`、`reconnect_on_network_error`、`reconnect_delay_max=10`、
+`rw_timeout=15000000`),连接断开后从断点续传;用 `--demuxer` / `--left-demuxer` / `--right-demuxer`
+自己写的同名参数优先。重连仍失败时,终端提示 `Reading stopped after 时间点`,那一侧停在最后一帧,程序不退出。
 
 启动后**左右移动鼠标**拖动分割线,**滚轮**缩放,**空格**播放/暂停。
 
@@ -341,6 +347,16 @@ macOS 对非原生档位是**按逻辑分辨率的 2 倍渲染,再重采样到�
 ---
 
 ## 版本历史
+
+### 未发布
+
+- **在线视频断流不再崩溃。** 码率高的大文件在暂停或停留时,服务器会断开闲置的连接,之前读到半个包就报
+  `Invalid data found when processing input` 退出。现在 `http://` / `https://` 地址自动断线重连、从断点续传,
+  命令行写的同名参数优先;本地文件不受影响。
+- **坏数据跳过,不再退出。** 解码遇到损坏的数据(`Invalid NAL unit size` 一类)时打印一条警告并丢掉这个包继续解码,
+  和 ffplay 一样;连续出错时每 100 次再提示一次。损坏的那一段会花屏或停在上一帧。
+- **读取中断会提示位置。** 网络断开或文件截断导致提前读不下去时,终端提示 `Reading stopped after 时间点`,
+  不再悄无声息地当作视频结束。新增 `corrupt-input` 集成测试。
 
 ### v1.8.1 — 2026-11-12
 

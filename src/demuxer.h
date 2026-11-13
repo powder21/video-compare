@@ -36,4 +36,5 @@ class Demuxer : public SideAware {
 
   AVFormatContext* format_context_{};
   int video_stream_index_{};
+  int64_t last_read_position_{AV_NOPTS_VALUE};
 };

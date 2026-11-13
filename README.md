@@ -327,6 +327,11 @@ Note that root privileges are required to perform this operation in most environ
 1. Audio playback is not supported.
 2. Keep time-shifts below a few seconds for the best experience.
 3. Seeks require re-synchronization on the closest keyframe (i.e., I-frame).
+4. `http://` and `https://` inputs reconnect and resume from the last byte read when the connection drops, for
+   instance after the server closes a connection left idle while paused. Options you pass with `--demuxer`,
+   `--left-demuxer` or `--right-demuxer` (such as `reconnect=0`) override these defaults. Corrupt video data is
+   skipped with a warning instead of ending the program, and a read that fails before the end of the file is
+   reported with the position where it stopped.
 
 ## Practical tips
 

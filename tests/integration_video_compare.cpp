@@ -27,7 +27,7 @@
 
 namespace {
 
-enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, FrameStepping, FrameSteppingVfr, SharedFrameStepping, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay, RefStep };
+enum class Scenario { Baseline, EventInjection, Seek, StillSeek, SyncMismatch, MultiRightSync, FrameNavigation, FrameStepping, FrameSteppingVfr, SharedFrameStepping, BufferForwardOnly, BufferPingPong, SeekBurstForward, SeekBurstMixed, CropCopy, InteractiveCrop, DynamicSwap, RightStep, RightStepPlay, CropPreview, MixedRateRights, RightStepEdges, RefOverlay, RefStep, CorruptInput };
 
 std::atomic<int> events_pushed{0};
 std::atomic<bool> watchdog_fired{false};
@@ -91,6 +91,8 @@ const char* scenario_name(const Scenario scenario) {
       return "ref-step";
     case Scenario::RightStepEdges:
       return "right-step-edges";
+    case Scenario::CorruptInput:
+      return "corrupt-input";
   }
   return "unknown";
 }
@@ -1287,6 +1289,12 @@ void run_event_script_body(const Scenario scenario, CapturedOutput& captured_out
     sleep_ms(700);
     push_keydown(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, 0);
     sleep_ms(400);
+  } else if (scenario == Scenario::CorruptInput) {
+    // Frames 30-59 of the right clip cannot be split into NAL units. Playback must skip them and reach the clean tail.
+    FrameProbe probe(captured_out, checkpoints, false);
+    probe.wait("corrupt-input playback past the damaged frames", [](const FrameState& state) {
+      return native_frame_index(state.right_pts) >= 75;
+    }, false);
   } else if (scenario == Scenario::MixedRateRights) {
     FrameProbe probe(captured_out, checkpoints, false);
     auto key = [](const SDL_Keycode code, const SDL_Scancode scancode, const SDL_Keymod mod = KMOD_NONE) {
@@ -1446,7 +1454,8 @@ int run_scenario(const Scenario scenario, const std::vector<std::string>& files)
     config.frame_buffer_size = 3;
   }
 
-  const bool observe_frames = scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr || scenario == Scenario::SharedFrameStepping || scenario == Scenario::MixedRateRights;
+  const bool observe_frames = scenario == Scenario::FrameStepping || scenario == Scenario::FrameSteppingVfr || scenario == Scenario::SharedFrameStepping || scenario == Scenario::MixedRateRights ||
+                              scenario == Scenario::CorruptInput;
   SDL_setenv("VIDEO_COMPARE_LOG_FRAME_STATE", observe_frames ? "1" : "0", 1);
   CapturedOutput captured_out;
   std::vector<FrameState> checkpoints;
@@ -2341,6 +2350,7 @@ void print_usage(const char* argv0) {
   std::fprintf(stderr, "  %s mixed-rate-rights LEFT_25 RIGHT0_25 RIGHT1_30\n", argv0);
   std::fprintf(stderr, "  %s ref-overlay LEFT RIGHT REF\n", argv0);
   std::fprintf(stderr, "  %s ref-step LEFT RIGHT REF\n", argv0);
+  std::fprintf(stderr, "  %s corrupt-input LEFT CORRUPT_RIGHT\n", argv0);
 }
 
 }  // namespace
@@ -2371,6 +2381,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
       }
       return run_scenario(Scenario::EventInjection, files);
+    }
+    if (name == "corrupt-input") {
+      if (files.size() != 2) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      return run_scenario(Scenario::CorruptInput, files);
     }
     if (name == "seek") {
       if (files.size() != 2) {

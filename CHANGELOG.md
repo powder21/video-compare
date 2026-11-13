@@ -3,6 +3,22 @@
 Notable changes in this fork of [pixop/video-compare](https://github.com/pixop/video-compare).
 Upstream releases keep their own date-stamped tags; this fork's own work is tagged `v1.x`.
 
+## Unreleased
+
+- **Network inputs survive dropped connections.** Servers close connections a
+  paused player stops reading from, which with large, high-bitrate files left a
+  half-read packet that ended the program with `Invalid data found when
+  processing input`. `http://` and `https://` inputs now reconnect and resume
+  from the last byte read; options given with `--demuxer` and friends override
+  these defaults, and local files are unaffected.
+- **Corrupt video data is skipped instead of fatal.** The decoder drops packets
+  it rejects as invalid data and carries on, as ffplay does. It warns on the
+  first failure and then every 100 consecutive ones; other decoder errors still
+  stop the program.
+- **Interrupted reads are reported.** A read that fails before the end of the
+  file prints the position where it stopped instead of passing for a normal end
+  of video. A new `corrupt-input` integration test covers the skipping.
+
 ## v1.8.1 — 2026-11-12
 
 - **Chinese documentation in every build download.** Windows, macOS, and Linux

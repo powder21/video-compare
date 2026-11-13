@@ -1,7 +1,26 @@
 #include "demuxer.h"
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include "ffmpeg.h"
 #include "string_utils.h"
+
+static bool is_http_url(const std::string& file_name) {
+  std::string lower = file_name.substr(0, 8);
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+  return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
+}
+
+// Servers drop connections the player stops reading from (e.g. while paused), so
+// resume such reads from the last byte instead of feeding a truncated packet to
+// the decoder. Options given by the user take precedence.
+static void set_default_http_options(AVDictionary** options) {
+  av_dict_set(options, "reconnect", "1", AV_DICT_DONT_OVERWRITE);
+  av_dict_set(options, "reconnect_on_network_error", "1", AV_DICT_DONT_OVERWRITE);
+  av_dict_set(options, "reconnect_delay_max", "10", AV_DICT_DONT_OVERWRITE);
+  av_dict_set(options, "rw_timeout", "15000000", AV_DICT_DONT_OVERWRITE);
+}
 
 Demuxer::Demuxer(const Side& side, const std::string& demuxer_name, const std::string& file_name, AVDictionary* demuxer_options, const AVDictionary* decoder_options) : SideAware(side) {
   ScopedLogSide scoped_log_side(side);
@@ -16,8 +35,28 @@ Demuxer::Demuxer(const Side& side, const std::string& demuxer_name, const std::s
     }
   }
 
-  ffmpeg::check(file_name, avformat_open_input(&format_context_, file_name.c_str(), const_cast<AVInputFormat*>(input_format), &demuxer_options));
-  ffmpeg::check_dict_is_empty(demuxer_options, string_sprintf("Demuxer %s", format_name().c_str()));
+  AVDictionary* open_options = nullptr;
+  av_dict_copy(&open_options, demuxer_options, 0);
+
+  if (is_http_url(file_name)) {
+    set_default_http_options(&open_options);
+  }
+
+  const int open_result = avformat_open_input(&format_context_, file_name.c_str(), const_cast<AVInputFormat*>(input_format), &open_options);
+
+  if (open_result < 0) {
+    av_dict_free(&open_options);
+    ffmpeg::check(file_name, open_result);
+  }
+
+  try {
+    ffmpeg::check_dict_is_empty(open_options, string_sprintf("Demuxer %s", format_name().c_str()));
+  } catch (...) {
+    av_dict_free(&open_options);
+    avformat_close_input(&format_context_);
+    throw;
+  }
+  av_dict_free(&open_options);
 
   // Try to find best stream first
   video_stream_index_ = av_find_best_stream(format_context_, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
@@ -137,7 +176,29 @@ AVRational Demuxer::sample_aspect_ratio(AVFrame* frame) const {
 }
 
 bool Demuxer::operator()(AVPacket& packet) {
-  return av_read_frame(format_context_, &packet) >= 0;
+  const int ret = av_read_frame(format_context_, &packet);
+
+  if (ret >= 0) {
+    if (packet.stream_index == video_stream_index_) {
+      const int64_t ts = packet.pts != AV_NOPTS_VALUE ? packet.pts : packet.dts;
+
+      if (ts != AV_NOPTS_VALUE) {
+        last_read_position_ = av_rescale_q(ts, time_base(), AV_R_MICROSECONDS);
+      }
+    }
+    return true;
+  }
+
+  // Demuxers report a failed read (e.g. a dropped connection) as EOF, but leave the error on the I/O context
+  const int io_error = format_context_->pb != nullptr ? format_context_->pb->error : 0;
+  const int error = ret != AVERROR_EOF ? ret : (io_error < 0 && io_error != AVERROR_EOF ? io_error : 0);
+
+  if (error < 0) {
+    const std::string position = last_read_position_ != AV_NOPTS_VALUE ? format_position(last_read_position_ * AV_TIME_TO_SEC, false) : "the start";
+    log_warning(string_sprintf("Reading stopped after %s (%s); the rest of the video is unavailable", position.c_str(), ffmpeg::error_string(error).c_str()));
+  }
+
+  return false;
 }
 
 bool Demuxer::seek(const float position, const bool backward) {

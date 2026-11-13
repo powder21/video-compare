@@ -65,3 +65,14 @@ generate_clip "$out_dir/crop_right1_320.mp4" 1 25 320x180
 generate_clip "$out_dir/crop_right2_160.mp4" 1 25 160x90
 generate_clip "$out_dir/dynamic_left_43.mp4" 1 25 320x240
 generate_clip "$out_dir/dynamic_right_169.mp4" 1 25 640x360
+# H.264 with every packet in frames 30-59 claiming a first NAL longer than the
+# packet, like a read cut off mid-packet: the decoder rejects them as invalid data.
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'testsrc=size=320x180:rate=25:duration=4' \
+  -pix_fmt yuv420p -c:v libx264 -g 25 \
+  "$out_dir/corrupt_right_25.mp4"
+ffprobe -v error -select_streams v -show_entries packet=pos -of csv=p=0 "$out_dir/corrupt_right_25.mp4" |
+  sed -n '31,60p' |
+  while read -r pos; do
+    printf '\177\377\377\377' | dd of="$out_dir/corrupt_right_25.mp4" bs=1 seek="$pos" conv=notrunc 2>/dev/null
+  done

@@ -177,10 +177,24 @@ std::string VideoDecoder::hw_accel_name() const {
   return hw_accel_name_;
 }
 
+void VideoDecoder::skip_corrupt_data(const int error) {
+  // A damaged stretch can fail on every packet; warn on the first and then periodically
+  if (corrupt_streak_ % CORRUPT_DATA_WARNING_INTERVAL == 0) {
+    const std::string streak = corrupt_streak_ > 0 ? string_sprintf("; %u consecutive failures so far", corrupt_streak_) : "";
+    log_warning(string_sprintf("Skipping corrupt video data (%s)%s", ffmpeg::error_string(error).c_str(), streak.c_str()));
+  }
+  corrupt_streak_++;
+}
+
 bool VideoDecoder::send(AVPacket* packet) {
   auto ret = avcodec_send_packet(codec_context_, packet);
   if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
     return false;
+  }
+  if (ret == AVERROR_INVALIDDATA) {
+    // Drop the packet and carry on, as ffplay does
+    skip_corrupt_data(ret);
+    return true;
   }
   ffmpeg::check(ret);
   return true;
@@ -191,7 +205,12 @@ bool VideoDecoder::receive(AVFrame* frame, Demuxer* demuxer) {
   if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
     return false;
   }
+  if (ret == AVERROR_INVALIDDATA) {
+    skip_corrupt_data(ret);
+    return false;
+  }
   ffmpeg::check(ret);
+  corrupt_streak_ = 0;
 
 #if defined(AV_FRAME_FLAG_KEY)
   const bool is_key = (frame->flags & AV_FRAME_FLAG_KEY) != 0;

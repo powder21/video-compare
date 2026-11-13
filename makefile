@@ -200,7 +200,9 @@ integration: $(integration_bin)
 	echo "Running $(integration_bin) ref-step"; \
 	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_right_25.mp4" "$$media/step_right1_25.mp4"; \
 	echo "Running $(integration_bin) ref-step (single decoder)"; \
-	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"
+	$$wrap ./$(integration_bin) ref-step "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4" "$$media/seek_left_25.mp4"; \
+	echo "Running $(integration_bin) corrupt-input"; \
+	$$wrap ./$(integration_bin) corrupt-input "$$media/seek_left_25.mp4" "$$media/corrupt_right_25.mp4"
 
 .PHONY: stress
 stress: $(integration_bin)

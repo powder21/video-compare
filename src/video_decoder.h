@@ -54,6 +54,7 @@ class VideoDecoder : public SideAware {
 
  private:
   int64_t metadata_duration(Demuxer* demuxer, AVFrame* frame);
+  void skip_corrupt_data(int error);
 
   const AVCodec* codec_{};
   AVCodecContext* codec_context_{};
@@ -72,4 +73,7 @@ class VideoDecoder : public SideAware {
   DurationDeriver duration_deriver_;
 
   unsigned peak_luminance_nits_;
+
+  static constexpr unsigned CORRUPT_DATA_WARNING_INTERVAL = 100;
+  unsigned corrupt_streak_{0};
 };
